@@ -14,6 +14,7 @@ document.querySelectorAll(".tab").forEach((t) => {
     if (t.dataset.tab === "kalshi") loadKalshi();
     if (t.dataset.tab === "record") loadRecord();
     if (t.dataset.tab === "autobet") loadAutobet();
+    if (t.dataset.tab === "combo") loadComboGames();
   });
 });
 
@@ -265,6 +266,48 @@ async function toggleMarkets(btn) {
 document.getElementById("matches").addEventListener("click", (e) => {
   const btn = e.target.closest(".markets-btn");
   if (btn) toggleMarkets(btn);
+});
+
+/* ---------- guided leg builder (dropdowns) ---------- */
+let _marketsCache = {};
+async function loadComboGames() {
+  const sel = document.getElementById("lbGame");
+  if (sel.options.length > 1) return; // already loaded
+  const d = await (await fetch(`${API}/api/matches`)).json();
+  const up = d.matches.filter((m) => m.status !== "completed");
+  sel.innerHTML = `<option value="">1. choose game…</option>` +
+    up.map((m) => `<option data-home="${m.home}" data-away="${m.away}">${m.home} v ${m.away}</option>`).join("");
+}
+document.getElementById("lbGame").addEventListener("change", async (e) => {
+  const opt = e.target.selectedOptions[0];
+  const home = opt.dataset.home, away = opt.dataset.away;
+  const mSel = document.getElementById("lbMarket"), sSel = document.getElementById("lbSel");
+  sSel.innerHTML = `<option value="">3. pick…</option>`;
+  if (!home) { mSel.innerHTML = `<option value="">2. market…</option>`; return; }
+  mSel.innerHTML = `<option>loading…</option>`;
+  const key = `${home}|${away}`;
+  if (!_marketsCache[key]) {
+    _marketsCache[key] = (await (await fetch(`${API}/api/markets?team_a=${encodeURIComponent(home)}&team_b=${encodeURIComponent(away)}`)).json()).markets;
+  }
+  mSel.dataset.home = home; mSel.dataset.away = away;
+  mSel.innerHTML = `<option value="">2. market…</option>` +
+    Object.keys(_marketsCache[key]).map((c) => `<option>${c}</option>`).join("");
+});
+document.getElementById("lbMarket").addEventListener("change", (e) => {
+  const cat = e.target.value, home = e.target.dataset.home, away = e.target.dataset.away;
+  const sSel = document.getElementById("lbSel");
+  const sels = (_marketsCache[`${home}|${away}`] || {})[cat] || [];
+  sSel.innerHTML = `<option value="">3. pick…</option>` +
+    sels.map((s, i) => `<option value="${i}">${s.label} — ${(s.prob*100).toFixed(0)}% (odds ${s.fair_odds})</option>`).join("");
+});
+document.getElementById("lbAdd").addEventListener("click", () => {
+  const gOpt = document.getElementById("lbGame").selectedOptions[0];
+  const home = gOpt && gOpt.dataset.home, away = gOpt && gOpt.dataset.away;
+  const cat = document.getElementById("lbMarket").value;
+  const sIdx = document.getElementById("lbSel").value;
+  if (!home || !cat || sIdx === "") return alert("Pick a game, a market, and a selection first.");
+  const s = _marketsCache[`${home}|${away}`][cat][parseInt(sIdx)];
+  addComboLeg(`${home} v ${away}: ${s.label}`, s.prob, s.fair_odds, home, away, cat, s.label);
 });
 
 /* ---------- combo builder ---------- */

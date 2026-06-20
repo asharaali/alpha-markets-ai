@@ -98,13 +98,25 @@
           <button class="btn ab" data-style="optimize">⭐ Best Parlay — max odds + money + safety the model can find</button>
         </div>
       </div>
-      <div id="comboLegs" class="combo-legs"></div>
-      <div class="combo-add">
-        <input id="legLabel" placeholder="Leg label (e.g. Argentina to win)" />
-        <input id="legProb" type="number" step="0.01" min="0" max="1" placeholder="model prob (0-1)" />
-        <input id="legOdds" type="number" step="0.01" min="1" placeholder="decimal odds" />
-        <button id="addLeg" class="btn">Add leg</button>
+      <div class="leg-builder">
+        <span class="lb-label">➕ Build a leg — pick from the menu (auto-fills the odds):</span>
+        <div class="lb-row">
+          <select id="lbGame"><option value="">1. choose game…</option></select>
+          <select id="lbMarket"><option value="">2. market…</option></select>
+          <select id="lbSel"><option value="">3. pick…</option></select>
+          <button id="lbAdd" class="btn primary">＋ Add leg</button>
+        </div>
       </div>
+      <div id="comboLegs" class="combo-legs"></div>
+      <details class="manual-leg">
+        <summary>or enter a leg manually</summary>
+        <div class="combo-add">
+          <input id="legLabel" placeholder="Leg label (e.g. Argentina to win)" />
+          <input id="legProb" type="number" step="0.01" min="0" max="1" placeholder="model prob (0-1)" />
+          <input id="legOdds" type="number" step="0.01" min="1" placeholder="decimal odds" />
+          <button id="addLeg" class="btn">Add leg</button>
+        </div>
+      </details>
       <div class="combo-add">
         <input id="comboStake" type="number" step="1" min="0" placeholder="stake $ (for logging)" value="20" />
         <input id="comboBook" placeholder="book (Kalshi / Polymarket / …)" value="Kalshi" />
