@@ -38,6 +38,22 @@ def _signed_headers(method: str, path: str):
     }
 
 
+async def get_balance():
+    """Read-only: confirm the key works by fetching the account balance. Places nothing."""
+    if not (settings.KALSHI_KEY_ID and settings.KALSHI_PRIVATE_KEY):
+        return False, "no Kalshi key configured"
+    try:
+        path = "/trade-api/v2/portfolio/balance"
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"{BASE}/portfolio/balance", headers=_signed_headers("GET", path))
+        if r.status_code == 200:
+            cents = r.json().get("balance", 0)
+            return True, {"balance_usd": round(cents / 100, 2)}
+        return False, f"Kalshi rejected ({r.status_code}): {r.text[:140]}"
+    except Exception as exc:
+        return False, f"error: {exc}"
+
+
 async def _find_market(home: str, away: str, selection: str):
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(f"{BASE}/events", params={"series_ticker": "KXWCGAME",

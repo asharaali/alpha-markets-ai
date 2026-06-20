@@ -290,6 +290,16 @@ def autobet_set(req: AutoBetConfig, request: Request):
     return autobet.set_config(request.state.user, req.model_dump())
 
 
+@app.post("/api/autobet/verify")
+async def autobet_verify(request: Request):
+    """Read-only check that the Kalshi key is wired and can see your account (no order placed)."""
+    if not autobet.live_available(request.state.user):
+        return {"ok": False, "error": "Live trading isn't enabled for this account."}
+    from app.kalshi_trade import get_balance
+    ok, info = await get_balance()
+    return {"ok": ok, "result": info}
+
+
 @app.post("/api/notify/test")
 def notify_test(request: Request):
     """Send a test push to YOUR topic so you can confirm your phone is hooked up."""

@@ -62,6 +62,14 @@ document.getElementById("abSave").addEventListener("click", async () => {
   });
   loadAutobet();
 });
+document.getElementById("abVerify").addEventListener("click", async () => {
+  const out = document.getElementById("abVerifyOut");
+  out.textContent = "Checking…";
+  const d = await (await fetch(`${API}/api/autobet/verify`, { method: "POST" })).json();
+  out.innerHTML = d.ok
+    ? `✅ Connected to Kalshi — your balance is <b>$${d.result.balance_usd}</b>. Key works (no order placed).`
+    : `❌ ${d.error || (d.result && d.result) || "couldn't connect"}`;
+});
 
 /* ---------- helpers ---------- */
 const pct = (x) => (x * 100).toFixed(0) + "%";
