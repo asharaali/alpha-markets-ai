@@ -403,6 +403,7 @@ async function loadRecord() {
   d.pending_bets.forEach((b) => {
     document.getElementById(`hit-${b.id}`).onclick = () => settle(b.id, true);
     document.getElementById(`miss-${b.id}`).onclick = () => settle(b.id, false);
+    document.getElementById(`del-${b.id}`).onclick = () => removeBet(b.id);
   });
 
   document.getElementById("settledBets").innerHTML = d.recent_settled.length
@@ -439,7 +440,14 @@ function pendingRow(b, ls) {
     <div class="bet-actions">
       <button id="hit-${b.id}" class="btn hit">Hit ✓</button>
       <button id="miss-${b.id}" class="btn miss">Miss ✗</button>
+      <button id="del-${b.id}" class="btn del" title="Remove / changed my mind">✕</button>
     </div></div>`;
+}
+
+async function removeBet(id) {
+  if (!confirm("Remove this bet from your record?\n\n(Use this if you changed your mind or didn't actually place it. It won't count toward your stats.)")) return;
+  await fetch(`${API}/api/combo/${id}`, { method: "DELETE" });
+  loadRecord();
 }
 
 function settledRow(b) {
