@@ -359,14 +359,14 @@ const legLabels = (b) => (b.legs || []).map((l) => (typeof l === "string" ? l : 
 function cashoutTag(ls) {
   if (!ls) return "";
   if (ls.cash_out) {
-    return `<div class="cashout-light on" title="${ls.action}">⚠ CASH OUT</div>
-            <div class="live-health">live ${(ls.live_prob*100).toFixed(0)}% vs entry ${(ls.entry_prob*100).toFixed(0)}% — ${ls.action}</div>`;
+    return `<div class="cashout-light on" title="${ls.action}">🔴 CASH OUT NOW</div>
+            <div class="live-health">live ${(ls.live_prob*100).toFixed(0)}% vs entry ${(ls.entry_prob*100).toFixed(0)}% — it's slipping, bail if Kalshi offers a fair price</div>`;
   }
   if (ls.any_live) {
-    return `<div class="cashout-light off">CASH OUT</div>
-            <div class="live-health on-track">live ${(ls.live_prob*100).toFixed(0)}% vs entry ${(ls.entry_prob*100).toFixed(0)}% — ${ls.action}</div>`;
+    return `<div class="cashout-light off">🟢 HOLD — on track</div>
+            <div class="live-health on-track">live ${(ls.live_prob*100).toFixed(0)}% vs entry ${(ls.entry_prob*100).toFixed(0)}% — don't cash out, let it ride</div>`;
   }
-  return `<div class="cashout-light idle">CASH OUT</div>`;
+  return `<div class="cashout-light idle">⚪ cash-out alert: armed (game not live yet)</div>`;
 }
 
 function pendingRow(b, ls) {
