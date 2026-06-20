@@ -40,8 +40,11 @@ class Settings:
     # Conservative hard ceilings the user CANNOT exceed even if they crank their own limits.
     AUTOBET_HARD_MAX_STAKE: float = float(os.getenv("AUTOBET_HARD_MAX_STAKE", "10"))
     AUTOBET_HARD_DAILY_CAP: float = float(os.getenv("AUTOBET_HARD_DAILY_CAP", "50"))
-    # Live trading is double-gated: this env flag AND a Kalshi key must both be present.
+    # Live trading is triple-gated: this flag, a Kalshi key, AND the user must be the
+    # single account the Kalshi key belongs to. Everyone else is paper-only — nobody can
+    # ever place real orders on your Kalshi account but you.
     AUTOBET_LIVE_ALLOWED: bool = _as_bool(os.getenv("AUTOBET_LIVE_ALLOWED", "false"), False)
+    AUTOBET_LIVE_USER: str = os.getenv("AUTOBET_LIVE_USER", "asharaali").strip().lower()
     KALSHI_KEY_ID: str = os.getenv("KALSHI_KEY_ID", "").strip()
     KALSHI_PRIVATE_KEY: str = os.getenv("KALSHI_PRIVATE_KEY", "").strip()
 

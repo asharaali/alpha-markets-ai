@@ -54,15 +54,17 @@ def set_config(user: str, updates: Dict) -> Dict:
     cfg["min_edge"] = max(0.03, float(cfg["min_edge"]))          # never bet razor-thin edges
     cfg["max_bets_day"] = max(0, min(int(cfg["max_bets_day"]), 20))
     cfg["enabled"] = bool(cfg["enabled"])
-    # Cannot go live without the server allowing it AND a Kalshi key configured.
-    if cfg["mode"] == "live" and not live_available():
+    # Cannot go live unless YOU are the Kalshi account owner + server allows it + key present.
+    if cfg["mode"] == "live" and not live_available(user):
         cfg["mode"] = "paper"
     _cfg_path(user).write_text(json.dumps(cfg, indent=2))
     return cfg
 
 
-def live_available() -> bool:
-    return bool(settings.AUTOBET_LIVE_ALLOWED and settings.KALSHI_KEY_ID and settings.KALSHI_PRIVATE_KEY)
+def live_available(user: str = "") -> bool:
+    """Live only for the one account the Kalshi key belongs to. Everyone else: paper-only."""
+    return bool(settings.AUTOBET_LIVE_ALLOWED and settings.KALSHI_KEY_ID and settings.KALSHI_PRIVATE_KEY
+                and (user or "").strip().lower() == settings.AUTOBET_LIVE_USER)
 
 
 def _load_log(user) -> List[Dict]:
@@ -89,7 +91,7 @@ def status(user: str) -> Dict:
         "remaining_today": round(max(0.0, cfg["daily_cap"] - today_spend(user)), 2),
         "hard_max_stake": settings.AUTOBET_HARD_MAX_STAKE,
         "hard_daily_cap": settings.AUTOBET_HARD_DAILY_CAP,
-        "live_available": live_available(),
+        "live_available": live_available(user),
         "recent": sorted(_load_log(user), key=lambda b: b.get("ts", 0), reverse=True)[:25],
     }
 
@@ -123,7 +125,7 @@ async def scan_and_place(user: str, matches: List[Dict]) -> List[Dict]:
                      "selection": s["selection"], "odds": s["market_odds_decimal"],
                      "edge": round(s["edge"], 4), "ev": round(s["ev_per_dollar"], 4),
                      "stake": stake, "mode": cfg["mode"]}
-            if cfg["mode"] == "live":
+            if cfg["mode"] == "live" and live_available(user):
                 from app.kalshi_trade import place_yes
                 ok, info = await place_yes(m["home"], m["away"], s["selection"], stake)
                 entry["status"] = "LIVE ✓" if ok else "live failed"
