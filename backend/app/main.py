@@ -162,7 +162,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "notif-goals-tips-v1",
+        "build": "autobet-cachebust-v2",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,

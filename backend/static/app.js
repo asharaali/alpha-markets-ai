@@ -53,18 +53,31 @@ function autobetRow(b) {
     <span class="result-badge ${ok ? 'won' : 'lost'}">${b.status}</span></div>`;
 }
 document.getElementById("abSave").addEventListener("click", async () => {
+  const num = (id, fallback) => { const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? fallback : v; };
   const body = {
     enabled: document.getElementById("abEnabled").value === "true",
     mode: document.getElementById("abMode").value,
-    max_stake: parseFloat(document.getElementById("abMaxStake").value),
-    daily_cap: parseFloat(document.getElementById("abDailyCap").value),
-    min_edge: parseFloat(document.getElementById("abMinEdge").value) / 100,
-    max_bets_day: parseInt(document.getElementById("abMaxBets").value),
+    max_stake: num("abMaxStake", 2),
+    daily_cap: num("abDailyCap", 10),
+    min_edge: num("abMinEdge", 6) / 100,
+    max_bets_day: Math.round(num("abMaxBets", 3)),
   };
-  await fetch(`${API}/api/autobet`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  });
-  loadAutobet();
+  const btn = document.getElementById("abSave");
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    const res = await fetch(`${API}/api/autobet`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!res.ok) { alert(`Couldn't save (${res.status}). ${res.status === 401 ? "Log in again." : ""}`); return; }
+    const saved = await res.json();
+    btn.textContent = "✓ Saved";
+    await loadAutobet();
+  } catch (e) {
+    alert("Save failed — network error. " + e.message);
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = "Save settings"; }, 1500);
+  }
 });
 document.getElementById("abTestPush").addEventListener("click", async () => {
   const d = await (await fetch(`${API}/api/notify/test`, { method: "POST" })).json();
