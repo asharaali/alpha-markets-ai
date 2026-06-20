@@ -15,6 +15,7 @@ import uuid
 import httpx
 
 from app.config import settings
+from app.data_sources.kalshi_orderbook import orderbook_prices
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
@@ -71,28 +72,40 @@ async def _find_market(home: str, away: str, selection: str):
     return None
 
 
-async def place_yes(home: str, away: str, selection: str, stake_dollars: float):
-    """Buy YES contracts on a matchup outcome for ~stake_dollars. Returns (ok, info)."""
+async def place_order(ticker: str, side: str, stake_dollars: float):
+    """
+    Buy `side` ('yes'|'no') contracts on a specific Kalshi market for ~stake_dollars.
+    Prices off the live ORDERBOOK (the markets-list yes_ask is always null — that bug is
+    what made every order fail with 'no live ask price'). Returns (ok, info).
+    """
     if not (settings.KALSHI_KEY_ID and settings.KALSHI_PRIVATE_KEY):
         return False, "no Kalshi key configured"
+    side = side.lower()
     try:
-        mk = await _find_market(home, away, selection)
-        if not mk:
-            return False, "no matching open Kalshi market"
-        ask = mk.get("yes_ask")
-        if not ask:
-            return False, "market has no live ask price"
-        price = ask / 100.0
-        count = int(stake_dollars / price)
-        if count < 1:
-            return False, f"stake ${stake_dollars} too small for one contract at {ask}¢"
-        path = "/trade-api/v2/portfolio/orders"
-        body = {"ticker": mk["ticker"], "action": "buy", "side": "yes",
-                "count": count, "type": "market", "client_order_id": uuid.uuid4().hex}
-        async with httpx.AsyncClient(timeout=15) as c:
+        async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "AlphaMarketsAI/1.0"}) as c:
+            yes_bid, yes_ask, depth = await orderbook_prices(c, ticker)
+            # Cost to buy the side you want: YES at the yes ask, NO at (1 - yes bid).
+            price = yes_ask if side == "yes" else ((1 - yes_bid) if yes_bid is not None else None)
+            if not price:
+                return False, "no live ask price (empty/illiquid order book)"
+            cents = round(price * 100)
+            count = int(stake_dollars / price)
+            if count < 1:
+                return False, f"stake ${stake_dollars} too small for one contract at {cents}¢"
+            path = "/trade-api/v2/portfolio/orders"
+            body = {"ticker": ticker, "action": "buy", "side": side,
+                    "count": count, "type": "market", "client_order_id": uuid.uuid4().hex}
             r = await c.post(f"{BASE}/portfolio/orders", headers=_signed_headers("POST", path), json=body)
         if r.status_code in (200, 201):
-            return True, f"bought {count} YES @ ~{ask}¢ on {mk['ticker']}"
+            return True, f"bought {count} {side.upper()} @ ~{cents}¢ on {ticker}"
         return False, f"Kalshi rejected ({r.status_code}): {r.text[:140]}"
     except Exception as exc:
         return False, f"error: {exc}"
+
+
+async def place_yes(home: str, away: str, selection: str, stake_dollars: float):
+    """Buy YES on a World Cup matchup outcome for ~stake_dollars. Returns (ok, info)."""
+    mk = await _find_market(home, away, selection)
+    if not mk:
+        return False, "no matching open Kalshi market"
+    return await place_order(mk["ticker"], "yes", stake_dollars)

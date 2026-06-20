@@ -37,6 +37,17 @@ async function loadWeather() {
 
   const all = document.getElementById("weatherAll");
   all.innerHTML = d.all_markets.map(weatherMarketRow).join("");
+  loadWeatherCalibration();
+}
+async function loadWeatherCalibration() {
+  const el = document.getElementById("weatherCalib");
+  if (!el) return;
+  try {
+    const c = await (await fetch(`${API}/api/weather/calibration`)).json();
+    const rows = (c.by_lead || []).map((l) =>
+      `<div class="meta">${l.lead_days}d out: model assumes ±${l.assumed_sigma_f}°F, actual avg miss ${l.mae_f}°F (n=${l.n})</div>`).join("");
+    el.innerHTML = `<div class="sub"><b>Model calibration:</b> ${c.status}</div>${rows}`;
+  } catch (e) { el.textContent = ""; }
 }
 function weatherValueRow(v) {
   const conf = { high: "var(--green)", medium: "#d8a657", low: "var(--muted)" }[v.confidence];

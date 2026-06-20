@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 import httpx
 
 from app import weather_model
+from app.data_sources.kalshi_orderbook import orderbook_prices
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 _UA = {"User-Agent": "AlphaMarketsAI/1.0 (weather edge)"}
@@ -77,35 +78,6 @@ def _parse_market_date(ticker: str) -> Optional[date]:
         return None
 
 
-# A price level must have at least this many dollars resting to count as a real, tradeable
-# quote. Kalshi thin markets are littered with $1 stale orders at 1-2¢ that you can't
-# actually trade size against — pricing off those manufactures fake edge.
-_MIN_DEPTH = 20.0
-
-
-def _best_priced(levels):
-    """Highest-priced bid level with real depth -> (price, dollars). None if the book is dust."""
-    real = [(float(p), float(d)) for p, d in levels if float(d) >= _MIN_DEPTH]
-    if not real:
-        return None, 0.0
-    p = max(real, key=lambda x: x[0])
-    return p[0], p[1]
-
-
-async def _orderbook_prices(client, ticker: str):
-    """Depth-aware best YES bid/ask (0-1) from the live orderbook. ask = cost to BUY yes."""
-    try:
-        ob = (await client.get(f"{KALSHI_BASE}/markets/{ticker}/orderbook")).json()
-    except Exception:
-        return None, None, 0.0
-    fp = ob.get("orderbook_fp") or {}
-    yes_bid, yes_depth = _best_priced(fp.get("yes_dollars") or [])
-    no_bid, no_depth = _best_priced(fp.get("no_dollars") or [])
-    yes_ask = (1 - no_bid) if no_bid is not None else None   # best NO bid implies the YES offer
-    depth = min(yes_depth, no_depth) if (yes_bid and no_bid) else max(yes_depth, no_depth)
-    return yes_bid, yes_ask, round(depth, 2)
-
-
 async def get_weather_markets(series_filter: Optional[List[str]] = None) -> List[Dict]:
     """
     Pull open temperature contracts for each city, attach the NWS forecast + the model's
@@ -127,7 +99,7 @@ async def get_weather_markets(series_filter: Optional[List[str]] = None) -> List
                 continue
 
             # Price the order books in parallel (one call each).
-            books = await asyncio.gather(*[_orderbook_prices(client, m["ticker"]) for m in markets])
+            books = await asyncio.gather(*[orderbook_prices(client, m["ticker"]) for m in markets])
 
             for m, (yes_bid, yes_ask, depth) in zip(markets, books):
                 mdate = _parse_market_date(m["ticker"])

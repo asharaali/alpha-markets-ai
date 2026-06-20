@@ -22,6 +22,7 @@ from app.data_sources.odds_api import (get_soccer_matches, get_live_scores, merg
 from app.data_sources.kalshi import get_kalshi_wc_games
 from app.data_sources.kalshi_markets import get_weather_markets, CITIES
 from app.weather_analysis import analyze_weather
+from app import weather_calibration
 from app.analysis import (analyze_match, evaluate_combo, cashout_decision,
                           monitor_live_bets, build_auto_parlay, build_optimal_parlay,
                           next_best_tips, _legset)
@@ -164,7 +165,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "weather-markets-tab-v4",
+        "build": "orderbook-fix-weather-autobet-v5",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -227,9 +228,16 @@ async def kalshi():
 async def weather(bankroll: Optional[float] = None):
     """Markets tab: Kalshi daily-high temperature contracts priced against the NWS forecast."""
     rows = await get_weather_markets()
+    weather_calibration.log_forecasts(rows)   # snapshot for later calibration
     res = analyze_weather(rows, bankroll)
     res["cities"] = [c[0] for c in CITIES.values()]
     return res
+
+
+@app.get("/api/weather/calibration")
+async def weather_calib():
+    """How well the weather model's forecasts have matched reality so far (by lead time)."""
+    return await weather_calibration.calibration_report()
 
 
 @app.post("/api/combo")
@@ -417,9 +425,13 @@ async def _notify_loop():
             autobet_users = [u for u in auth.all_usernames() if autobet.get_config(u)["enabled"]]
             if autobet_users:
                 analyzed = [analyze_match(m) for m in await get_soccer_matches()]
+                # Price the weather board once for everyone too.
+                weather_values = analyze_weather(await get_weather_markets())["value_bets"]
                 for username in autobet_users:
                     topic = (auth.get_user(username) or {}).get("ntfy_topic")
-                    for p in await autobet.scan_and_place(username, analyzed):
+                    soccer = await autobet.scan_and_place(username, analyzed)
+                    weather = await autobet.scan_and_place_weather(username, weather_values)
+                    for p in soccer + weather:
                         tag = "PAPER" if p["mode"] == "paper" else "LIVE 💸"
                         send_push(f"[{tag}] {p['selection']} ({p['home']} v {p['away']}) "
                                   f"${p['stake']} @ {p['odds']} · edge +{p['edge']*100:.0f}% · {p['status']}",

@@ -9,6 +9,7 @@ value with the same discipline as the sportsbook board (shrink-to-market + guard
 Series ticker for World Cup games: KXWCGAME.
 """
 from __future__ import annotations
+import asyncio
 import time
 from typing import Dict, List, Optional
 
@@ -18,6 +19,7 @@ from app import probability as P
 from app.analysis import MODEL_WEIGHT, MIN_EDGE, LONGSHOT_FLOOR, HEAVY_FAV_CAP, _tier
 from app.config import settings
 from app.soccer_model import match_probabilities
+from app.data_sources.kalshi_orderbook import orderbook_prices
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 WC_SERIES = "KXWCGAME"
@@ -37,14 +39,9 @@ def _canon(name: str) -> str:
     return KALSHI_NAME_MAP.get(name.strip(), name.strip())
 
 
-def _price(market: Dict) -> Optional[float]:
-    """Mid price (0-1) from bid/ask, falling back to last trade. None if untraded."""
-    bid, ask, last = market.get("yes_bid"), market.get("yes_ask"), market.get("last_price")
-    if bid and ask:
-        return (bid + ask) / 200.0
-    if last:
-        return last / 100.0
-    return None
+def _price(market: Dict, prices: Dict[str, float]) -> Optional[float]:
+    """Live mid price (0-1) from the order book (markets-list bid/ask is always null)."""
+    return prices.get(market.get("ticker"))
 
 
 async def _fetch_events() -> List[Dict]:
@@ -80,7 +77,7 @@ def _evaluate_side(name: str, role: str, model_prob: float,
     }
 
 
-def _evaluate_event(event: Dict) -> Optional[Dict]:
+def _evaluate_event(event: Dict, prices: Dict[str, float]) -> Optional[Dict]:
     title = event.get("title", "")
     if " vs " not in title:
         return None
@@ -90,7 +87,7 @@ def _evaluate_event(event: Dict) -> Optional[Dict]:
     sides, priced = {}, {}
     for m in markets:
         sub = (m.get("yes_sub_title") or "").strip()
-        pr = _price(m)
+        pr = _price(m, prices)
         if sub.lower() in ("tie", "draw"):
             key = "tie"
         elif _canon(sub) == home:
@@ -142,7 +139,20 @@ async def get_kalshi_wc_games() -> List[Dict]:
         print(f"[kalshi] fetch failed: {exc}")
         return _CACHE["data"] or []  # type: ignore[return-value]
 
-    games = [g for g in (_evaluate_event(e) for e in events) if g]
+    # Real prices live in the orderbook endpoint — fetch them for every market in parallel,
+    # then build a ticker -> mid-price map. (markets-list bid/ask is always null.)
+    tickers = [m.get("ticker") for e in events for m in e.get("markets", []) if m.get("ticker")]
+    prices: Dict[str, float] = {}
+    try:
+        async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "AlphaMarketsAI/1.0"}) as client:
+            books = await asyncio.gather(*[orderbook_prices(client, t) for t in tickers])
+        for t, (yes_bid, yes_ask, _depth) in zip(tickers, books):
+            if yes_bid is not None and yes_ask is not None:
+                prices[t] = (yes_bid + yes_ask) / 2.0
+    except Exception as exc:
+        print(f"[kalshi] orderbook fetch failed: {exc}")
+
+    games = [g for g in (_evaluate_event(e, prices) for e in events) if g]
     # Tradeable + most value first.
     games.sort(key=lambda g: (g.get("tradeable", False), g.get("value_count", 0)), reverse=True)
     _CACHE["data"] = games

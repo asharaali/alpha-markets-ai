@@ -154,3 +154,50 @@ async def scan_and_place(user: str, matches: List[Dict]) -> List[Dict]:
     if dirty:
         _save_log(user, log)
     return placed
+
+
+async def scan_and_place_weather(user: str, value_bets: List[Dict]) -> List[Dict]:
+    """Auto-bet pass over the Weather tab's +EV temperature bets. Shares the same config,
+    budget, and hard caps as the soccer engine; places via the generic Kalshi order path."""
+    cfg = get_config(user)
+    if not cfg["enabled"]:
+        return []
+    log = _load_log(user)
+    done = {(b.get("ticker"), b.get("side")) for b in _today_attempts(user) if b.get("ticker")}
+    spend, count, placed, dirty = today_spend(user), len(today_bets(user)), [], False
+
+    for v in value_bets:
+        if v.get("edge", 0) < cfg["min_edge"]:
+            continue
+        key = (v["ticker"], v["side"])
+        if key in done:
+            continue
+        if count >= cfg["max_bets_day"] or spend >= cfg["daily_cap"]:
+            break
+        stake = round(min(cfg["max_stake"], cfg["daily_cap"] - spend), 2)
+        if stake <= 0:
+            break
+        price = v.get("price") or 0
+        entry = {"ts": time.time(), "day": _today(), "market": "weather", "ticker": v["ticker"],
+                 "home": v["city"], "away": v.get("label", ""),
+                 "selection": f"{v['side']} · {v['city']} {v.get('label','')}", "side": v["side"],
+                 "odds": round(1 / price, 2) if price else 0,
+                 "edge": round(v.get("edge", 0), 4), "ev": round(v.get("ev_per_dollar", 0), 4),
+                 "stake": stake, "mode": cfg["mode"]}
+        if cfg["mode"] == "live" and live_available(user):
+            from app.kalshi_trade import place_order
+            ok, info = await place_order(v["ticker"], v["side"].lower(), stake)
+            entry["status"] = "LIVE ✓" if ok else "live failed"
+            entry["info"] = info
+        else:
+            entry["status"] = "paper ✓"
+        log.append(entry)
+        placed.append(entry)
+        done.add(key)
+        dirty = True
+        if _succeeded(entry):
+            spend += stake
+            count += 1
+    if dirty:
+        _save_log(user, log)
+    return placed
