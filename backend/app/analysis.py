@@ -81,15 +81,26 @@ def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs:
     return res
 
 
+def _legset(combo) -> frozenset:
+    """A parlay's identity = its set of (game, selection) legs, order-independent."""
+    return frozenset((l.get("home"), l.get("away"), l.get("selection")) for l in combo)
+
+
 def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
-                         bankroll: Optional[float] = None) -> Dict:
+                         bankroll: Optional[float] = None,
+                         exclude: Optional[set] = None) -> Dict:
     """
     The '⭐ Best Parlay' optimizer. Maximises money AND safety by building ONLY from legs
     where the model genuinely beats the book (real +EV value bets, match-result market),
     then picking the combination with the best balance of edge and hit-probability.
+
+    `exclude` is a set of leg-sets (see _legset) already placed/shown — those are skipped so
+    repeat requests surface FRESH parlays instead of the same one. Up to 3 next-best
+    alternatives ride along under "alternatives".
     Honest fallback: if there's no +EV edge, it says so and offers the single best value bet.
     """
     import itertools
+    exclude = exclude or set()
     value_legs = []
     for m in matches:
         for s in m.get("suggestions", []):
@@ -103,8 +114,8 @@ def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
     if not value_legs:
         return {"optimize": True, "error": "No +EV edge on this day's board — the honest move is no bet."}
 
-    # Score balances money (EV) and safety (probability). One leg per game (independent).
-    best = None
+    # Rank every valid +EV combo by money*safety. One leg per game (independent events).
+    ranked = []
     for r in range(1, min(max_legs, len(value_legs)) + 1):
         for combo in itertools.combinations(value_legs, r):
             if len({(l["home"], l["away"]) for l in combo}) != r:
@@ -114,13 +125,53 @@ def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
             if res["ev_per_dollar"] <= 0:
                 continue
             score = res["ev_per_dollar"] * (res["combined_model_prob"] ** 0.5)
-            if best is None or score > best[0]:
-                best = (score, res)
-    if not best:
+            ranked.append((score, _legset(combo), res))
+    if not ranked:
         return {"optimize": True, "error": "No +EV combination — best is a single value bet."}
-    res = best[1]
+
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    fresh = [r for r in ranked if r[1] not in exclude]
+    if not fresh:
+        # Everything good is already on your slip — say so, still show the strongest.
+        res = ranked[0][2]
+        res["optimize"] = True
+        res["all_placed"] = True
+        res["note"] = "You've already got every +EV parlay on this board. This is the strongest one again."
+        return res
+
+    res = dict(fresh[0][2])
     res["optimize"] = True
+    res["alternatives"] = [r[2] for r in fresh[1:4]]  # next-best fresh parlays for variety
     return res
+
+
+def next_best_tips(matches: List[Dict], exclude_selections: Optional[set] = None,
+                   n: int = 3) -> List[Dict]:
+    """
+    'Bounce back' tips: the strongest fresh +EV plays to put down next — used after a
+    parlay misses so there's always a smart next move, never a dead end.
+    `exclude_selections` is a set of (home, away, selection) already placed today.
+    """
+    exclude_selections = exclude_selections or set()
+    tips = []
+    for m in matches:
+        if m.get("status") != "upcoming":     # next plays are pre-match only
+            continue
+        for s in m.get("suggestions", []):
+            if not s.get("value_bet"):
+                continue
+            key = (m["home"], m["away"], s.get("selection"))
+            if key in exclude_selections:
+                continue
+            tips.append({
+                "home": m["home"], "away": m["away"], "market": s.get("market"),
+                "selection": s.get("selection"),
+                "label": f"{s.get('selection')} ({m['home']} v {m['away']})",
+                "model_prob": s.get("model_prob"), "market_odds_decimal": s.get("market_odds_decimal"),
+                "edge": s.get("edge"), "ev": s.get("ev_per_dollar"),
+            })
+    tips.sort(key=lambda t: (t.get("ev") or 0), reverse=True)
+    return tips[:n]
 
 
 # Minimum edge (fair prob - market prob) before we call something a "value bet".
@@ -351,11 +402,21 @@ def monitor_live_bets(scores: List[Dict], user: str) -> List[Dict]:
         else:
             action, cash_out = "not started", False
 
+        # The actual live games this parlay touches (so the notifier can ping on goals).
+        live_games, seen_g = [], set()
+        for leg in legs:
+            h, a = leg.get("home"), leg.get("away")
+            g = idx.get((h, a)) if h and a else None
+            if g and (h, a) not in seen_g and (g["has_score"] or g["minute"] > 0 or g["completed"]):
+                seen_g.add((h, a))
+                live_games.append({"home": h, "away": a, "sa": g["sa"], "sb": g["sb"],
+                                   "minute": g["minute"], "completed": g["completed"]})
+
         out.append({
             "id": b["id"], "legs": leg_views,
             "entry_prob": round(entry_comb, 3), "live_prob": round(combined_live, 3),
             "health": round(health, 2), "any_live": any_live,
-            "action": action, "cash_out": cash_out,
+            "action": action, "cash_out": cash_out, "live_games": live_games,
         })
     return out
 

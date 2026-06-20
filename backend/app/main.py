@@ -21,7 +21,8 @@ from app.data_sources.odds_api import (get_soccer_matches, get_live_scores, merg
                                        QUOTA, LIVE_STATUS)
 from app.data_sources.kalshi import get_kalshi_wc_games
 from app.analysis import (analyze_match, evaluate_combo, cashout_decision,
-                          monitor_live_bets, build_auto_parlay, build_optimal_parlay)
+                          monitor_live_bets, build_auto_parlay, build_optimal_parlay,
+                          next_best_tips, _legset)
 from app.soccer_model import match_probabilities, update_after_result, MODEL_INFO, extended_markets
 from app import bet_log
 from app import autobet
@@ -226,7 +227,7 @@ def combo(req: ComboRequest, request: Request):
 
 
 @app.post("/api/parlay/auto")
-async def parlay_auto(req: AutoParlayRequest):
+async def parlay_auto(req: AutoParlayRequest, request: Request):
     """Auto-build a parlay: 5 risk tiers, or 'optimize' for the best money+safety balance."""
     if req.style.lower().strip() in ("optimize", "best"):
         raw = await get_soccer_matches()
@@ -235,7 +236,9 @@ async def parlay_auto(req: AutoParlayRequest):
             merge_scores(raw, scores)
         names = {(g["home"], g["away"]) for g in req.games}
         subset = [analyze_match(m) for m in raw if (m["home"], m["away"]) in names]
-        return build_optimal_parlay(subset, req.legs or 3)
+        # Skip parlays already on your slip so each request surfaces a fresh one.
+        placed = {_legset(b.get("legs", [])) for b in bet_log.pending_bets(request.state.user)}
+        return build_optimal_parlay(subset, req.legs or 3, exclude=placed)
     return build_auto_parlay(req.games, req.style, req.legs)
 
 
@@ -261,6 +264,18 @@ def combo_delete(bet_id: str, request: Request):
 def bets(request: Request):
     """Your record + the learning stats (hit rate, ROI, reality factor)."""
     return bet_log.stats(request.state.user)
+
+
+@app.get("/api/tips/next")
+async def tips_next(request: Request):
+    """Bounce-back tips: the strongest fresh +EV plays to bet next (used after a miss)."""
+    raw = await get_soccer_matches()
+    scores = await get_live_scores()
+    if scores:
+        merge_scores(raw, scores)
+    analyzed = [analyze_match(m) for m in raw]
+    placed = {(b["home"], b["away"], b["selection"]) for b in autobet.today_bets(request.state.user)}
+    return {"tips": next_best_tips(analyzed, exclude_selections=placed, n=3)}
 
 
 @app.get("/api/bets/live")
@@ -311,12 +326,28 @@ def notify_test(request: Request):
 
 
 # ---------- background push-notification monitor ----------
-_notify_state: dict = {}
+_notify_state: dict = {}   # bet_id -> last bucket sent
+_score_state: dict = {}    # (home, away) -> last (home_goals, away_goals) seen
 
 
 def _legtext(status) -> str:
     labels = [l.get("label", "leg").split(": ")[-1] for l in status.get("legs", [])]
     return " + ".join(labels)[:90] or "your parlay"
+
+
+async def _bounce_back(username: str, topic: str):
+    """After a parlay dies, immediately push the strongest fresh play to bet next."""
+    try:
+        analyzed = [analyze_match(m) for m in await get_soccer_matches()]
+        placed = {(b["home"], b["away"], b["selection"]) for b in autobet.today_bets(username)}
+        tips = next_best_tips(analyzed, exclude_selections=placed, n=3)
+        if tips:
+            t = tips[0]
+            send_push(f"Bounce back: {t['label']} @ {t['market_odds_decimal']} "
+                      f"· edge +{(t['edge'] or 0)*100:.0f}%. Strongest fresh value on the board.",
+                      title="💡 Place this next", tags=["bulb"], topic=topic)
+    except Exception as exc:
+        print(f"[bounce_back] {exc}")
 
 
 async def _notify_loop():
@@ -334,6 +365,19 @@ async def _notify_loop():
                     for s in monitor_live_bets(scores or [], username):
                         if s["any_live"]:
                             any_live = True
+
+                        # --- GOAL alerts: ping the moment a tracked game's score changes ---
+                        for gv in s.get("live_games", []):
+                            gkey = (gv["home"], gv["away"])
+                            sig = (gv["sa"], gv["sb"])
+                            prev = _score_state.get(gkey)
+                            if prev is not None and sig != prev:
+                                scorer = (gv["home"] if sig[0] > prev[0] else gv["away"])
+                                send_push(f"GOAL — {scorer} scored! {gv['home']} {sig[0]}-{sig[1]} {gv['away']} "
+                                          f"({gv['minute']}'). Watching your parlay.",
+                                          title="⚽ GOAL", tags=["soccer"], topic=topic)
+                            _score_state[gkey] = sig
+
                         bucket = ("cashout" if s["cash_out"]
                                   else "great" if (s["any_live"] and s["live_prob"] >= 0.85)
                                   else "live" if s["any_live"] else "idle")
@@ -342,6 +386,9 @@ async def _notify_loop():
                                 send_push(f"{_legtext(s)} is slipping — live {s['live_prob']*100:.0f}% "
                                           f"(was {s['entry_prob']*100:.0f}%). {s['action']}.",
                                           title="🔴 CASH OUT", priority="high", tags=["rotating_light"], topic=topic)
+                                # Dead parlay? Hand him the next best play so there's no dead end.
+                                if "DEAD" in s["action"]:
+                                    await _bounce_back(username, topic)
                             elif bucket == "great":
                                 send_push(f"{_legtext(s)} looking great — live {s['live_prob']*100:.0f}%! "
                                           f"On track to hit.", title="🟢 Parlay cruising",

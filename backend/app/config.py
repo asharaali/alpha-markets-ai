@@ -44,6 +44,8 @@ class Settings:
     # single account the Kalshi key belongs to. Everyone else is paper-only — nobody can
     # ever place real orders on your Kalshi account but you.
     AUTOBET_LIVE_ALLOWED: bool = _as_bool(os.getenv("AUTOBET_LIVE_ALLOWED", "false"), False)
+    # Must equal the username you LOG IN with (lowercase). On Render set this env var to
+    # your actual login name, or live trading silently falls back to paper for you.
     AUTOBET_LIVE_USER: str = os.getenv("AUTOBET_LIVE_USER", "asharaali").strip().lower()
     KALSHI_KEY_ID: str = os.getenv("KALSHI_KEY_ID", "").strip()
     KALSHI_PRIVATE_KEY: str = os.getenv("KALSHI_PRIVATE_KEY", "").strip()
