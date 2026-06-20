@@ -43,11 +43,13 @@ async function loadAutobet() {
     : `<div class="empty">No auto-bets yet. Arm it (paper mode) and it'll fire on the model's strongest value picks.</div>`;
 }
 function autobetRow(b) {
-  const live = b.mode === "live";
+  const failed = (b.status || "").includes("failed");
+  const ok = !failed && (b.mode !== "live" || b.status.includes("✓"));
   return `<div class="bet">
     <div class="bet-info"><b>${b.selection} <span class="muted">(${b.home} v ${b.away})</span></b>
-      <div class="meta">$${b.stake} @ ${b.odds} · edge +${(b.edge*100).toFixed(0)}% · ${new Date(b.ts*1000).toLocaleString()}</div></div>
-    <span class="result-badge ${live ? 'lost' : 'won'}">${b.status}</span></div>`;
+      <div class="meta">$${b.stake} @ ${b.odds} · edge +${(b.edge*100).toFixed(0)}% · ${new Date(b.ts*1000).toLocaleString()}</div>
+      ${b.info ? `<div class="sub" style="color:${failed ? 'var(--red)' : 'var(--muted)'}">↳ ${b.info}</div>` : ""}</div>
+    <span class="result-badge ${ok ? 'won' : 'lost'}">${b.status}</span></div>`;
 }
 document.getElementById("abSave").addEventListener("click", async () => {
   const body = {
