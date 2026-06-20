@@ -558,6 +558,7 @@ document.querySelectorAll(".btn.ab").forEach((b) => {
   b.addEventListener("click", async () => {
     const style = b.dataset.style;
     const dateVal = document.getElementById("abDate").value;
+    const legs = parseInt(document.getElementById("abLegs").value, 10) || 3;
     const data = await (await fetch(`${API}/api/matches`)).json();
     // All styles (incl. Best Parlay) use only the games on the selected date.
     const games = data.matches
@@ -566,7 +567,7 @@ document.querySelectorAll(".btn.ab").forEach((b) => {
     if (!games.length) return alert("No games found for that date. Try another day or the All filter on the Live Board.");
     const r = await (await fetch(`${API}/api/parlay/auto`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ games, style }),
+      body: JSON.stringify({ games, style, legs }),
     })).json();
     if (r.error) return alert(r.error);
     comboLegs = r.legs.map((l) => ({

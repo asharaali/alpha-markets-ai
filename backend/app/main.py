@@ -162,6 +162,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
+        "build": "notif-goals-tips-v1",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -229,6 +230,8 @@ def combo(req: ComboRequest, request: Request):
 @app.post("/api/parlay/auto")
 async def parlay_auto(req: AutoParlayRequest, request: Request):
     """Auto-build a parlay: 5 risk tiers, or 'optimize' for the best money+safety balance."""
+    # Parlays can run 2–8 legs (default 3). Clamp whatever the UI sends.
+    legs = max(2, min(int(req.legs or 3), 8))
     if req.style.lower().strip() in ("optimize", "best"):
         raw = await get_soccer_matches()
         scores = await get_live_scores()
@@ -238,8 +241,8 @@ async def parlay_auto(req: AutoParlayRequest, request: Request):
         subset = [analyze_match(m) for m in raw if (m["home"], m["away"]) in names]
         # Skip parlays already on your slip so each request surfaces a fresh one.
         placed = {_legset(b.get("legs", [])) for b in bet_log.pending_bets(request.state.user)}
-        return build_optimal_parlay(subset, req.legs or 3, exclude=placed)
-    return build_auto_parlay(req.games, req.style, req.legs)
+        return build_optimal_parlay(subset, legs, exclude=placed)
+    return build_auto_parlay(req.games, req.style, legs)
 
 
 @app.post("/api/combo/log")

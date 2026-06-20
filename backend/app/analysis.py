@@ -114,6 +114,11 @@ def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
     if not value_legs:
         return {"optimize": True, "error": "No +EV edge on this day's board — the honest move is no bet."}
 
+    # Bound the search: combinations up to 8 legs explode if there are many value legs,
+    # so keep only the strongest candidates by EV before the combinatorial pass.
+    value_legs.sort(key=lambda l: l["ev"], reverse=True)
+    value_legs = value_legs[:14]
+
     # Rank every valid +EV combo by money*safety. One leg per game (independent events).
     ranked = []
     for r in range(1, min(max_legs, len(value_legs)) + 1):
