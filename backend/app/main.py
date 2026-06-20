@@ -20,6 +20,8 @@ from app import auth
 from app.data_sources.odds_api import (get_soccer_matches, get_live_scores, merge_scores,
                                        QUOTA, LIVE_STATUS)
 from app.data_sources.kalshi import get_kalshi_wc_games
+from app.data_sources.kalshi_markets import get_weather_markets, CITIES
+from app.weather_analysis import analyze_weather
 from app.analysis import (analyze_match, evaluate_combo, cashout_decision,
                           monitor_live_bets, build_auto_parlay, build_optimal_parlay,
                           next_best_tips, _legset)
@@ -162,7 +164,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "autobet-budget-fix-v3",
+        "build": "weather-markets-tab-v4",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -219,6 +221,15 @@ async def kalshi():
     games = await get_kalshi_wc_games()
     tradeable = sum(1 for g in games if g.get("tradeable"))
     return {"count": len(games), "tradeable": tradeable, "games": games}
+
+
+@app.get("/api/weather")
+async def weather(bankroll: Optional[float] = None):
+    """Markets tab: Kalshi daily-high temperature contracts priced against the NWS forecast."""
+    rows = await get_weather_markets()
+    res = analyze_weather(rows, bankroll)
+    res["cities"] = [c[0] for c in CITIES.values()]
+    return res
 
 
 @app.post("/api/combo")

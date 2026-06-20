@@ -6,7 +6,7 @@
   <title>Alpha Markets AI</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=2" />
+  <link rel="stylesheet" href="/static/styles.css?v=3" />
 </head>
 <body>
   <div id="loginGate" class="login-gate">
@@ -47,6 +47,7 @@
     <button class="tab" data-tab="cashout">Cash-Out Checker</button>
     <button class="tab" data-tab="record">My Record</button>
     <button class="tab" data-tab="autobet">🤖 Auto-Bet</button>
+    <button class="tab" data-tab="weather">🌡️ Markets</button>
   </nav>
 
   <div id="dataBanner" class="data-banner"></div>
@@ -194,12 +195,28 @@
       <h3 class="rec-h">Auto-bet log</h3>
       <div id="abLog" class="bet-list"></div>
     </section>
+
+    <section id="weather" class="panel">
+      <h2>🌡️ Weather Markets <span class="muted" style="font-size:13px">— Kalshi daily-high temps vs the NWS forecast</span></h2>
+      <div class="ab-warn">
+        <b>How the edge works:</b> the model turns the official NWS high-temp forecast into a probability
+        for each Kalshi temperature contract, then flags where the market price disagrees. Separate from
+        the World Cup engine. <b>The weather edge is UNPROVEN</b> — it skips today's markets (already
+        half-decided), shrinks toward the market on big disagreements, and ignores thin/penny books.
+        Paper-test before trusting it. Settles on each city's official station; our forecast point is approximate.
+      </div>
+      <div id="weatherStatus" class="sub" style="margin:10px 0">Loading forecasts + order books…</div>
+      <h3 class="rec-h">✅ Value bets (model beats the market)</h3>
+      <div id="weatherValue" class="bet-list"></div>
+      <h3 class="rec-h">All priced contracts</h3>
+      <div id="weatherAll" class="bet-list"></div>
+    </section>
   </main>
 
   <footer class="disclaimer">
     Alpha Markets AI surfaces mathematical edge (vig-removal, expected value, Kelly sizing). It does not predict the future and cannot guarantee outcomes. Bet only what you can afford to lose. For 18+/21+ where legal.
   </footer>
 
-  <script src="/static/app.js?v=2"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

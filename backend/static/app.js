@@ -15,8 +15,45 @@ document.querySelectorAll(".tab").forEach((t) => {
     if (t.dataset.tab === "record") loadRecord();
     if (t.dataset.tab === "autobet") loadAutobet();
     if (t.dataset.tab === "combo") loadComboGames();
+    if (t.dataset.tab === "weather") loadWeather();
   });
 });
+
+/* ---------- weather markets ---------- */
+async function loadWeather() {
+  const status = document.getElementById("weatherStatus");
+  status.textContent = "Loading forecasts + order books…";
+  let d;
+  try {
+    d = await (await fetch(`${API}/api/weather`)).json();
+  } catch (e) { status.textContent = "Couldn't load weather markets."; return; }
+  status.innerHTML = `Priced <b>${d.count}</b> contracts across ${d.cities.length} cities · `
+    + `<b>${d.value_count}</b> value bet${d.value_count === 1 ? "" : "s"} found (min edge ${Math.round(d.min_edge * 100)} pts).`;
+
+  const value = document.getElementById("weatherValue");
+  value.innerHTML = d.value_bets.length
+    ? d.value_bets.map(weatherValueRow).join("")
+    : `<div class="empty">No +EV weather bets right now — the honest move is no bet. Check back as forecasts update.</div>`;
+
+  const all = document.getElementById("weatherAll");
+  all.innerHTML = d.all_markets.map(weatherMarketRow).join("");
+}
+function weatherValueRow(v) {
+  const conf = { high: "var(--green)", medium: "#d8a657", low: "var(--muted)" }[v.confidence];
+  return `<div class="bet">
+    <div class="bet-info"><b>BUY ${v.side} · ${v.city} ${v.label}</b>
+      <div class="meta">${v.date} · ${v.lead_days}d out · NWS forecast ${v.forecast_high_f}°F · depth $${v.depth}</div>
+      <div class="sub">model ${pct(v.model_prob_shrunk)} vs market ${Math.round(v.price * 100)}¢ → edge <b style="color:var(--green)">+${Math.round(v.edge * 100)} pts</b> · EV +${Math.round(v.ev_per_dollar * 100)}%/$ · suggested $${v.kelly_stake}</div></div>
+    <span class="result-badge won" style="background:${conf}22;color:${conf}">${v.confidence} conf</span></div>`;
+}
+function weatherMarketRow(m) {
+  const bid = m.yes_bid != null ? Math.round(m.yes_bid * 100) + "¢" : "—";
+  const ask = m.yes_ask != null ? Math.round(m.yes_ask * 100) + "¢" : "—";
+  return `<div class="bet">
+    <div class="bet-info"><b>${m.city} ${m.label}</b>
+      <div class="meta">${m.date} · ${m.lead_days}d · NWS ${m.forecast_high_f}°F</div></div>
+    <div class="sub" style="text-align:right">model <b>${pct(m.model_prob)}</b><br>mkt ${bid}/${ask}</div></div>`;
+}
 
 /* ---------- auto-bet ---------- */
 async function loadAutobet() {
