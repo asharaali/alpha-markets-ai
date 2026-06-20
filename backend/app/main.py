@@ -24,6 +24,7 @@ from app.analysis import (analyze_match, evaluate_combo, cashout_decision,
                           monitor_live_bets, build_auto_parlay, build_optimal_parlay)
 from app.soccer_model import match_probabilities, update_after_result, MODEL_INFO, extended_markets
 from app import bet_log
+from app import autobet
 from app.notifications import send_push
 
 app = FastAPI(title="Alpha Markets AI", version="0.1.0")
@@ -51,9 +52,12 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-def _set_session(resp: Response, username: str):
+def _set_session(resp: Response, username: str, request: Request):
+    # Mark secure only over HTTPS (so it works on the cloud AND on local http).
+    https = (request.headers.get("x-forwarded-proto", "").startswith("https")
+             or request.url.scheme == "https")
     resp.set_cookie("amai_session", auth.make_token(username), max_age=60 * 60 * 24 * 60,
-                    httponly=True, samesite="lax", secure=True)
+                    httponly=True, samesite="lax", secure=https)
 
 
 class AuthRequest(BaseModel):
@@ -62,7 +66,7 @@ class AuthRequest(BaseModel):
 
 
 @app.post("/api/signup")
-def signup(req: AuthRequest):
+def signup(req: AuthRequest, request: Request):
     username, err = auth.create_user(req.username, req.password)
     if err:
         return JSONResponse({"error": err}, status_code=400)
@@ -71,18 +75,18 @@ def signup(req: AuthRequest):
         bet_log.migrate_legacy(username)
     u = auth.get_user(username)
     resp = JSONResponse({"user": username, "ntfy_topic": u["ntfy_topic"]})
-    _set_session(resp, username)
+    _set_session(resp, username, request)
     return resp
 
 
 @app.post("/api/login")
-def login(req: AuthRequest):
+def login(req: AuthRequest, request: Request):
     if not auth.verify_user(req.username, req.password):
         return JSONResponse({"error": "wrong username or password"}, status_code=401)
     username = req.username.strip().lower()
     u = auth.get_user(username)
     resp = JSONResponse({"user": username, "ntfy_topic": u["ntfy_topic"]})
-    _set_session(resp, username)
+    _set_session(resp, username, request)
     return resp
 
 
@@ -267,6 +271,25 @@ async def bets_live(request: Request):
     return {"any_live": any(s["any_live"] for s in statuses), "bets": statuses}
 
 
+class AutoBetConfig(BaseModel):
+    enabled: Optional[bool] = None
+    mode: Optional[str] = None          # paper | live
+    max_stake: Optional[float] = None
+    daily_cap: Optional[float] = None
+    min_edge: Optional[float] = None
+    max_bets_day: Optional[int] = None
+
+
+@app.get("/api/autobet")
+def autobet_status(request: Request):
+    return autobet.status(request.state.user)
+
+
+@app.post("/api/autobet")
+def autobet_set(req: AutoBetConfig, request: Request):
+    return autobet.set_config(request.state.user, req.model_dump())
+
+
 @app.post("/api/notify/test")
 def notify_test(request: Request):
     """Send a test push to YOUR topic so you can confirm your phone is hooked up."""
@@ -318,6 +341,19 @@ async def _notify_loop():
                                           title="⚽ Game on", priority="low", tags=["soccer"], topic=topic)
                             _notify_state[s["id"]] = bucket
                 delay = 45 if any_live else 120
+
+            # Auto-bet pass for users who've armed it (paper or live).
+            autobet_users = [u for u in auth.all_usernames() if autobet.get_config(u)["enabled"]]
+            if autobet_users:
+                analyzed = [analyze_match(m) for m in await get_soccer_matches()]
+                for username in autobet_users:
+                    topic = (auth.get_user(username) or {}).get("ntfy_topic")
+                    for p in await autobet.scan_and_place(username, analyzed):
+                        tag = "PAPER" if p["mode"] == "paper" else "LIVE 💸"
+                        send_push(f"[{tag}] {p['selection']} ({p['home']} v {p['away']}) "
+                                  f"${p['stake']} @ {p['odds']} · edge +{p['edge']*100:.0f}% · {p['status']}",
+                                  title="🤖 Auto-bet placed", topic=topic, tags=["robot"])
+                delay = min(delay, 120)
         except Exception as exc:
             print(f"[notify_loop] {exc}")
             delay = 120

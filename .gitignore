@@ -13,3 +13,6 @@ __pycache__/
 bin/
 backend/data/bet_log.json
 *.log
+
+# All runtime user data (accounts, bets, secrets) — never commit
+backend/data/

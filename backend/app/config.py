@@ -36,6 +36,15 @@ class Settings:
     NTFY_TOPIC: str = os.getenv("NTFY_TOPIC", "alpha-markets-ashar-x7k2").strip()
     NOTIFY_ENABLED: bool = _as_bool(os.getenv("NOTIFY_ENABLED", "true"), True)
 
+    # ---- Auto-bet (autonomous order placement) ----
+    # Conservative hard ceilings the user CANNOT exceed even if they crank their own limits.
+    AUTOBET_HARD_MAX_STAKE: float = float(os.getenv("AUTOBET_HARD_MAX_STAKE", "10"))
+    AUTOBET_HARD_DAILY_CAP: float = float(os.getenv("AUTOBET_HARD_DAILY_CAP", "50"))
+    # Live trading is double-gated: this env flag AND a Kalshi key must both be present.
+    AUTOBET_LIVE_ALLOWED: bool = _as_bool(os.getenv("AUTOBET_LIVE_ALLOWED", "false"), False)
+    KALSHI_KEY_ID: str = os.getenv("KALSHI_KEY_ID", "").strip()
+    KALSHI_PRIVATE_KEY: str = os.getenv("KALSHI_PRIVATE_KEY", "").strip()
+
     # Where per-user accounts + bet logs live. Auto-uses the Render persistent disk
     # (/var/data) when present, else a local folder — no env var needed.
     DATA_DIR: str = os.getenv("DATA_DIR") or (

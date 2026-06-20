@@ -46,6 +46,7 @@
     <button class="tab" data-tab="combo">Combo Builder</button>
     <button class="tab" data-tab="cashout">Cash-Out Checker</button>
     <button class="tab" data-tab="record">My Record</button>
+    <button class="tab" data-tab="autobet">🤖 Auto-Bet</button>
   </nav>
 
   <div id="dataBanner" class="data-banner"></div>
@@ -143,6 +144,26 @@
       <div id="pendingBets" class="bet-list"></div>
       <h3 class="rec-h">Settled history</h3>
       <div id="settledBets" class="bet-list"></div>
+    </section>
+
+    <!-- AUTO-BET -->
+    <section id="autobet" class="panel">
+      <h2>🤖 Auto-Bet</h2>
+      <div class="ab-warn">
+        <b>⚠️ This places bets automatically.</b> It starts in <b>PAPER mode</b> (simulated, no real money) so you can watch it before trusting it. The model's edge is <b>unproven</b> — keep stakes tiny. Hard ceilings (max stake &amp; daily cap) can never be exceeded.
+      </div>
+      <div id="abStatus" class="record-stats"></div>
+      <div class="ab-form">
+        <label class="ab-toggle">Auto-bet is <select id="abEnabled"><option value="false">OFF</option><option value="true">ON</option></select></label>
+        <label>Mode <select id="abMode"><option value="paper">📝 Paper (simulated)</option><option value="live">💸 Live (real money)</option></select></label>
+        <label>Max stake per bet ($) <input id="abMaxStake" type="number" step="1" min="0" /></label>
+        <label>Daily cap ($) <input id="abDailyCap" type="number" step="1" min="0" /></label>
+        <label>Min edge to fire (%) <input id="abMinEdge" type="number" step="1" min="3" /></label>
+        <label>Max bets per day <input id="abMaxBets" type="number" step="1" min="0" /></label>
+      </div>
+      <button id="abSave" class="btn primary">Save settings</button>
+      <h3 class="rec-h">Auto-bet log</h3>
+      <div id="abLog" class="bet-list"></div>
     </section>
   </main>
 

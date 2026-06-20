@@ -13,7 +13,54 @@ document.querySelectorAll(".tab").forEach((t) => {
     document.getElementById(t.dataset.tab).classList.add("active");
     if (t.dataset.tab === "kalshi") loadKalshi();
     if (t.dataset.tab === "record") loadRecord();
+    if (t.dataset.tab === "autobet") loadAutobet();
   });
+});
+
+/* ---------- auto-bet ---------- */
+async function loadAutobet() {
+  const d = await (await fetch(`${API}/api/autobet`)).json();
+  const c = d.config;
+  document.getElementById("abEnabled").value = String(c.enabled);
+  document.getElementById("abMode").value = c.mode;
+  document.getElementById("abMaxStake").value = c.max_stake;
+  document.getElementById("abDailyCap").value = c.daily_cap;
+  document.getElementById("abMinEdge").value = Math.round(c.min_edge * 100);
+  document.getElementById("abMaxBets").value = c.max_bets_day;
+  const liveOpt = document.querySelector('#abMode option[value="live"]');
+  liveOpt.disabled = !d.live_available;
+  liveOpt.textContent = d.live_available ? "💸 Live (real money)" : "💸 Live (needs Kalshi key)";
+  document.getElementById("abStatus").innerHTML = `
+    <div class="kv">
+      <div>Status<b style="color:${c.enabled ? 'var(--green)' : 'var(--muted)'}">${c.enabled ? "ARMED · " + c.mode.toUpperCase() : "OFF"}</b></div>
+      <div>Today<b>${d.today_count} bets · $${d.today_spend}</b></div>
+      <div>Remaining today<b>$${d.remaining_today}</b></div>
+      <div>Hard caps<b>$${d.hard_max_stake}/bet · $${d.hard_daily_cap}/day</b></div>
+    </div>`;
+  document.getElementById("abLog").innerHTML = d.recent.length
+    ? d.recent.map(autobetRow).join("")
+    : `<div class="empty">No auto-bets yet. Arm it (paper mode) and it'll fire on the model's strongest value picks.</div>`;
+}
+function autobetRow(b) {
+  const live = b.mode === "live";
+  return `<div class="bet">
+    <div class="bet-info"><b>${b.selection} <span class="muted">(${b.home} v ${b.away})</span></b>
+      <div class="meta">$${b.stake} @ ${b.odds} · edge +${(b.edge*100).toFixed(0)}% · ${new Date(b.ts*1000).toLocaleString()}</div></div>
+    <span class="result-badge ${live ? 'lost' : 'won'}">${b.status}</span></div>`;
+}
+document.getElementById("abSave").addEventListener("click", async () => {
+  const body = {
+    enabled: document.getElementById("abEnabled").value === "true",
+    mode: document.getElementById("abMode").value,
+    max_stake: parseFloat(document.getElementById("abMaxStake").value),
+    daily_cap: parseFloat(document.getElementById("abDailyCap").value),
+    min_edge: parseFloat(document.getElementById("abMinEdge").value) / 100,
+    max_bets_day: parseInt(document.getElementById("abMaxBets").value),
+  };
+  await fetch(`${API}/api/autobet`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  loadAutobet();
 });
 
 /* ---------- helpers ---------- */
