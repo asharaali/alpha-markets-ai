@@ -559,11 +559,10 @@ document.querySelectorAll(".btn.ab").forEach((b) => {
     const style = b.dataset.style;
     const dateVal = document.getElementById("abDate").value;
     const data = await (await fetch(`${API}/api/matches`)).json();
-    // Best Parlay hunts the WHOLE upcoming board for edge; tiers respect the chosen date.
-    const games = (style === "optimize"
-      ? data.matches.filter((m) => m.status !== "completed").slice(0, 20)
-      : data.matches.filter((m) => m.status !== "completed" && (!dateVal || localDate(m.commence_time) === dateVal)).slice(0, 8)
-    ).map((m) => ({ home: m.home, away: m.away }));
+    // All styles (incl. Best Parlay) use only the games on the selected date.
+    const games = data.matches
+      .filter((m) => m.status !== "completed" && (!dateVal || localDate(m.commence_time) === dateVal))
+      .slice(0, 12).map((m) => ({ home: m.home, away: m.away }));
     if (!games.length) return alert("No games found for that date. Try another day or the All filter on the Live Board.");
     const r = await (await fetch(`${API}/api/parlay/auto`, {
       method: "POST", headers: { "Content-Type": "application/json" },
