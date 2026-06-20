@@ -165,7 +165,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "kalshi-v2-orders-v6",
+        "build": "test-order-button-v7",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -335,6 +335,24 @@ async def autobet_verify(request: Request):
     from app.kalshi_trade import get_balance
     ok, info = await get_balance()
     return {"ok": ok, "result": info}
+
+
+@app.post("/api/autobet/test-live-order")
+async def autobet_test_live_order(request: Request):
+    """Place ONE real minimum-size order on the most liquid market to prove the live path.
+    Real money — but a single contract (~$1), gated to the live account only."""
+    if not autobet.live_available(request.state.user):
+        return {"ok": False, "error": "Live trading isn't enabled for this account (need Kalshi key + live flag + correct login)."}
+    rows = await get_weather_markets()
+    priced = [r for r in rows if r.get("yes_ask") and (r.get("depth") or 0) >= 20]
+    if not priced:
+        return {"ok": False, "error": "No liquid market available to test on right now."}
+    best = max(priced, key=lambda r: r["depth"])          # deepest book = safest to fill
+    from app.kalshi_trade import place_order
+    cost = best["yes_ask"]
+    ok, info = await place_order(best["ticker"], "yes", cost * 1.1)   # sized to ~1 contract
+    return {"ok": ok, "result": info, "market": f"{best['city']} {best['label']}",
+            "ticker": best["ticker"], "price_cents": round(cost * 100)}
 
 
 @app.post("/api/notify/test")

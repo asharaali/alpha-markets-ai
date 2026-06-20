@@ -139,6 +139,17 @@ document.getElementById("abVerify").addEventListener("click", async () => {
     ? `✅ Connected to Kalshi — your balance is <b>$${d.result.balance_usd}</b>. Key works (no order placed).`
     : `❌ ${d.error || (d.result && d.result) || "couldn't connect"}`;
 });
+document.getElementById("abTestOrder").addEventListener("click", async () => {
+  const out = document.getElementById("abVerifyOut");
+  if (!confirm("This places ONE real ~$1 order on the most liquid market to prove live trading works. Continue?")) return;
+  out.textContent = "Placing one real test order…";
+  let d;
+  try { d = await (await fetch(`${API}/api/autobet/test-live-order`, { method: "POST" })).json(); }
+  catch (e) { out.textContent = "Network error: " + e.message; return; }
+  out.innerHTML = d.ok
+    ? `✅ <b>LIVE ORDER FILLED</b> — ${d.result} (${d.market} @ ${d.price_cents}¢). Live trading works.`
+    : `❌ Live order failed: ${d.error || d.result || "unknown"}. (No money moved.)`;
+});
 
 /* ---------- helpers ---------- */
 const pct = (x) => (x * 100).toFixed(0) + "%";
