@@ -1,0 +1,15 @@
+# Secrets — never commit
+backend/.env
+
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# Local-only runtime + tools (not for the cloud repo)
+bin/
+backend/data/bet_log.json
+*.log
