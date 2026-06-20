@@ -466,6 +466,51 @@ document.querySelectorAll(".btn.ab").forEach((b) => {
 // default the date picker to today
 (() => { const d = document.getElementById("abDate"); if (d) d.value = new Date().toLocaleDateString("en-CA"); })();
 
+/* ---------- auth / login gate ---------- */
+let currentUser = null, currentTopic = null;
+
+async function checkAuth() {
+  try {
+    const d = await (await fetch(`${API}/api/me`)).json();
+    if (d.user) { currentUser = d.user; currentTopic = d.ntfy_topic; enterApp(); }
+    else document.getElementById("loginGate").classList.add("show");
+  } catch (e) {
+    document.getElementById("loginGate").classList.add("show");
+  }
+}
+
+function enterApp() {
+  document.getElementById("loginGate").classList.remove("show");
+  document.getElementById("userTag").innerHTML = `👤 ${currentUser} · <a id="logoutBtn">log out</a>`;
+  document.getElementById("logoutBtn").onclick = async () => {
+    await fetch(`${API}/api/logout`, { method: "POST" });
+    location.reload();
+  };
+  loadModelInfo();
+  loadMatches();  // self-schedules its next poll based on whether a game is live
+}
+
+async function doAuth(path) {
+  const username = document.getElementById("liUser").value.trim();
+  const password = document.getElementById("liPass").value;
+  const err = document.getElementById("liError");
+  err.textContent = "";
+  if (!username || !password) { err.textContent = "enter a username and password"; return; }
+  const res = await fetch(`${API}${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  const d = await res.json();
+  if (!res.ok) { err.textContent = d.error || "failed"; return; }
+  currentUser = d.user; currentTopic = d.ntfy_topic;
+  enterApp();
+  if (path.includes("signup")) {
+    setTimeout(() => alert(`Welcome, ${currentUser}! 🎉\n\nYour bets are private to your account.\n\n🔔 For phone alerts: open the ntfy app and subscribe to YOUR topic:\n\n${currentTopic}`), 350);
+  }
+}
+document.getElementById("liLogin").addEventListener("click", () => doAuth("/api/login"));
+document.getElementById("liSignup").addEventListener("click", () => doAuth("/api/signup"));
+document.getElementById("liPass").addEventListener("keydown", (e) => { if (e.key === "Enter") doAuth("/api/login"); });
+
 /* ---------- boot ---------- */
-loadModelInfo();
-loadMatches();  // self-schedules its next poll based on whether a game is live
+checkAuth();

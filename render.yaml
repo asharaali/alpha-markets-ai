@@ -26,8 +26,10 @@ services:
         value: alpha-markets-ashar-x7k2
       - key: NOTIFY_ENABLED
         value: "true"
-      - key: BET_LOG_PATH
-        value: /var/data/bet_log.json
+      - key: DATA_DIR
+        value: /var/data
+      - key: SITE_SECRET
+        generateValue: true     # stable random secret for signing login cookies
     disk:
       name: data
       mountPath: /var/data    # $1/mo, keeps your bet history across restarts

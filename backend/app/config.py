@@ -1,5 +1,6 @@
 """Central configuration. Loaded once at startup."""
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,6 +35,34 @@ class Settings:
     # Phone push notifications via ntfy.sh (install the free 'ntfy' app, subscribe to this topic).
     NTFY_TOPIC: str = os.getenv("NTFY_TOPIC", "alpha-markets-ashar-x7k2").strip()
     NOTIFY_ENABLED: bool = _as_bool(os.getenv("NOTIFY_ENABLED", "true"), True)
+
+    # Where per-user accounts + bet logs live. Auto-uses the Render persistent disk
+    # (/var/data) when present, else a local folder — no env var needed.
+    DATA_DIR: str = os.getenv("DATA_DIR") or (
+        "/var/data" if Path("/var/data").is_dir() else str(Path(__file__).parent.parent / "data"))
+    # Secret for signing login cookies. Use env if given, else generate+persist one on disk
+    # (stable across restarts, never the insecure default).
+    SITE_SECRET: str = ""  # set just below
+
+
+def _resolve_secret() -> str:
+    env = os.getenv("SITE_SECRET", "").strip()
+    if env:
+        return env
+    import secrets
+    p = Path(Settings.DATA_DIR) / ".secret"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if p.exists():
+            return p.read_text().strip()
+        s = secrets.token_hex(32)
+        p.write_text(s)
+        return s
+    except Exception:
+        return secrets.token_hex(32)
+
+
+Settings.SITE_SECRET = _resolve_secret()
 
 
 settings = Settings()

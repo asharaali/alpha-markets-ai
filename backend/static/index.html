@@ -9,6 +9,20 @@
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
+  <div id="loginGate" class="login-gate">
+    <div class="login-box">
+      <div class="login-logo">α</div>
+      <h1>Alpha Markets AI</h1>
+      <p class="login-sub">Log in, or create an account to get started</p>
+      <input id="liUser" placeholder="username" autocomplete="username" />
+      <input id="liPass" type="password" placeholder="password" autocomplete="current-password" />
+      <div id="liError" class="login-error"></div>
+      <button id="liLogin" class="btn primary">Log in</button>
+      <button id="liSignup" class="btn">Create account</button>
+      <p class="login-note">🔒 Your bets, record &amp; data are private to your account — nobody else can see them.</p>
+    </div>
+  </div>
+
   <header class="topbar">
     <div class="brand">
       <div class="logo">α</div>
@@ -22,6 +36,7 @@
       <span id="liveDot" class="live-dot"></span>
       <span id="liveLabel">connecting…</span>
       <span id="modeBadge" class="badge">—</span>
+      <span id="userTag" class="user-tag"></span>
     </div>
   </header>
 

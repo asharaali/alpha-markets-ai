@@ -237,7 +237,7 @@ def analyze_match(match: Dict, bankroll: Optional[float] = None) -> Dict:
     }
 
 
-def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None) -> Dict:
+def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Optional[str] = None) -> Dict:
     """
     Evaluate a parlay/combo (e.g. a Kalshi multi-leg).
     Each leg: {"model_prob": float, "market_odds_decimal": float, "label": str}
@@ -256,7 +256,7 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None) -> Dict:
     # Learning loop: if your logged results say the model is overconfident on combos,
     # shrink the probability we bet on by the measured 'reality factor'.
     from app.bet_log import reality_factor
-    rf = reality_factor()
+    rf = reality_factor(user) if user else None
     adj_prob = combined_prob * rf if rf else combined_prob
     adj_prob = min(max(adj_prob, 1e-6), 0.999)
 
@@ -283,7 +283,7 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None) -> Dict:
     }
 
 
-def monitor_live_bets(scores: List[Dict]) -> List[Dict]:
+def monitor_live_bets(scores: List[Dict], user: str) -> List[Dict]:
     """
     Watch every pending logged parlay against the LIVE games it involves and decide
     whether to flash CASH OUT. The light turns on when the parlay's live combined
@@ -306,7 +306,7 @@ def monitor_live_bets(scores: List[Dict]) -> List[Dict]:
         }
 
     out = []
-    for b in bet_log.pending_bets():
+    for b in bet_log.pending_bets(user):
         legs = b.get("legs", [])
         # Skip legacy bets logged before structured legs existed (can't track live).
         if not legs or any(not isinstance(l, dict) for l in legs):

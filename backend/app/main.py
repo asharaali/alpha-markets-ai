@@ -9,13 +9,14 @@ import asyncio
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from app.config import settings
+from app import auth
 from app.data_sources.odds_api import (get_soccer_matches, get_live_scores, merge_scores,
                                        QUOTA, LIVE_STATUS)
 from app.data_sources.kalshi import get_kalshi_wc_games
@@ -31,6 +32,74 @@ app.add_middleware(
 )
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+
+# API paths reachable without being logged in.
+_PUBLIC = {"/api/health", "/api/login", "/api/signup", "/api/logout", "/api/me"}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Identify the user from the session cookie; gate the data API behind login."""
+    user = None
+    tok = request.cookies.get("amai_session")
+    if tok:
+        user = auth.read_token(tok)
+    request.state.user = user
+    path = request.url.path
+    if path.startswith("/api/") and path not in _PUBLIC and not user:
+        return JSONResponse({"error": "login required"}, status_code=401)
+    return await call_next(request)
+
+
+def _set_session(resp: Response, username: str):
+    resp.set_cookie("amai_session", auth.make_token(username), max_age=60 * 60 * 24 * 60,
+                    httponly=True, samesite="lax", secure=True)
+
+
+class AuthRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/signup")
+def signup(req: AuthRequest):
+    username, err = auth.create_user(req.username, req.password)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    # First account inherits any pre-accounts bets (your $41 parlay, etc.).
+    if len(auth.all_usernames()) == 1:
+        bet_log.migrate_legacy(username)
+    u = auth.get_user(username)
+    resp = JSONResponse({"user": username, "ntfy_topic": u["ntfy_topic"]})
+    _set_session(resp, username)
+    return resp
+
+
+@app.post("/api/login")
+def login(req: AuthRequest):
+    if not auth.verify_user(req.username, req.password):
+        return JSONResponse({"error": "wrong username or password"}, status_code=401)
+    username = req.username.strip().lower()
+    u = auth.get_user(username)
+    resp = JSONResponse({"user": username, "ntfy_topic": u["ntfy_topic"]})
+    _set_session(resp, username)
+    return resp
+
+
+@app.post("/api/logout")
+def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("amai_session")
+    return resp
+
+
+@app.get("/api/me")
+def me(request: Request):
+    user = request.state.user
+    if not user:
+        return {"user": None}
+    u = auth.get_user(user) or {}
+    return {"user": user, "ntfy_topic": u.get("ntfy_topic")}
 
 
 # ---------- API models ----------
@@ -147,9 +216,9 @@ async def kalshi():
 
 
 @app.post("/api/combo")
-def combo(req: ComboRequest):
+def combo(req: ComboRequest, request: Request):
     legs = [leg.model_dump() for leg in req.legs]
-    return evaluate_combo(legs, req.bankroll)
+    return evaluate_combo(legs, req.bankroll, user=request.state.user)
 
 
 @app.post("/api/parlay/auto")
@@ -167,43 +236,45 @@ async def parlay_auto(req: AutoParlayRequest):
 
 
 @app.post("/api/combo/log")
-def combo_log(req: LogBetRequest):
+def combo_log(req: LogBetRequest, request: Request):
     """Save a combo as a pending bet so you can settle it later."""
-    return bet_log.log_bet(req.combo, req.stake, req.book)
+    return bet_log.log_bet(request.state.user, req.combo, req.stake, req.book)
 
 
 @app.post("/api/combo/settle")
-def combo_settle(req: SettleRequest):
+def combo_settle(req: SettleRequest, request: Request):
     """Tell the model whether a logged combo hit or missed — this is how it learns."""
-    b = bet_log.settle_bet(req.bet_id, req.hit)
+    b = bet_log.settle_bet(request.state.user, req.bet_id, req.hit)
     return b or {"error": "bet not found"}
 
 
 @app.delete("/api/combo/{bet_id}")
-def combo_delete(bet_id: str):
-    return {"deleted": bet_log.delete_bet(bet_id)}
+def combo_delete(bet_id: str, request: Request):
+    return {"deleted": bet_log.delete_bet(request.state.user, bet_id)}
 
 
 @app.get("/api/bets")
-def bets():
+def bets(request: Request):
     """Your record + the learning stats (hit rate, ROI, reality factor)."""
-    return bet_log.stats()
+    return bet_log.stats(request.state.user)
 
 
 @app.get("/api/bets/live")
-async def bets_live():
+async def bets_live(request: Request):
     """Live cash-out monitor: which pending parlays are going wrong right now."""
     scores = await get_live_scores()
-    statuses = monitor_live_bets(scores or [])
+    statuses = monitor_live_bets(scores or [], request.state.user)
     return {"any_live": any(s["any_live"] for s in statuses), "bets": statuses}
 
 
 @app.post("/api/notify/test")
-def notify_test():
-    """Send a test push so you can confirm your phone is hooked up."""
+def notify_test(request: Request):
+    """Send a test push to YOUR topic so you can confirm your phone is hooked up."""
+    u = auth.get_user(request.state.user) or {}
+    topic = u.get("ntfy_topic")
     ok = send_push("🔔 You're connected — alerts for cash-out and live parlay swings are ON.",
-                   title="Alpha Markets AI", tags=["bell"])
-    return {"sent": ok, "topic": settings.NTFY_TOPIC}
+                   title="Alpha Markets AI", tags=["bell"], topic=topic)
+    return {"sent": ok, "topic": topic}
 
 
 # ---------- background push-notification monitor ----------
@@ -220,28 +291,32 @@ async def _notify_loop():
     while True:
         delay = 300
         try:
-            if bet_log.pending_bets():
+            # Only fetch scores once, then check every user's bets against them.
+            users_with_bets = [u for u in auth.all_usernames() if bet_log.pending_bets(u)]
+            if users_with_bets:
                 scores = await get_live_scores()
-                statuses = monitor_live_bets(scores or [])
                 any_live = False
-                for s in statuses:
-                    if s["any_live"]:
-                        any_live = True
-                    bucket = ("cashout" if s["cash_out"]
-                              else "great" if (s["any_live"] and s["live_prob"] >= 0.85)
-                              else "live" if s["any_live"] else "idle")
-                    if bucket != _notify_state.get(s["id"]):
-                        if bucket == "cashout":
-                            send_push(f"{_legtext(s)} is slipping — live {s['live_prob']*100:.0f}% "
-                                      f"(was {s['entry_prob']*100:.0f}%). {s['action']}.",
-                                      title="🔴 CASH OUT", priority="high", tags=["rotating_light"])
-                        elif bucket == "great":
-                            send_push(f"{_legtext(s)} looking great — live {s['live_prob']*100:.0f}%! "
-                                      f"On track to hit.", title="🟢 Parlay cruising", tags=["white_check_mark"])
-                        elif bucket == "live" and _notify_state.get(s["id"]) in (None, "idle"):
-                            send_push(f"Kickoff — now tracking {_legtext(s)} live. I'll ping you if it turns.",
-                                      title="⚽ Game on", priority="low", tags=["soccer"])
-                        _notify_state[s["id"]] = bucket
+                for username in users_with_bets:
+                    topic = (auth.get_user(username) or {}).get("ntfy_topic")
+                    for s in monitor_live_bets(scores or [], username):
+                        if s["any_live"]:
+                            any_live = True
+                        bucket = ("cashout" if s["cash_out"]
+                                  else "great" if (s["any_live"] and s["live_prob"] >= 0.85)
+                                  else "live" if s["any_live"] else "idle")
+                        if bucket != _notify_state.get(s["id"]):
+                            if bucket == "cashout":
+                                send_push(f"{_legtext(s)} is slipping — live {s['live_prob']*100:.0f}% "
+                                          f"(was {s['entry_prob']*100:.0f}%). {s['action']}.",
+                                          title="🔴 CASH OUT", priority="high", tags=["rotating_light"], topic=topic)
+                            elif bucket == "great":
+                                send_push(f"{_legtext(s)} looking great — live {s['live_prob']*100:.0f}%! "
+                                          f"On track to hit.", title="🟢 Parlay cruising",
+                                          tags=["white_check_mark"], topic=topic)
+                            elif bucket == "live" and _notify_state.get(s["id"]) in (None, "idle"):
+                                send_push(f"Kickoff — now tracking {_legtext(s)} live. I'll ping you if it turns.",
+                                          title="⚽ Game on", priority="low", tags=["soccer"], topic=topic)
+                            _notify_state[s["id"]] = bucket
                 delay = 45 if any_live else 120
         except Exception as exc:
             print(f"[notify_loop] {exc}")

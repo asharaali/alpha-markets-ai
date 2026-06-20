@@ -15,33 +15,56 @@ import json
 import time
 import uuid
 from pathlib import Path
-import os
 from typing import Dict, List, Optional
 
-# In the cloud, point this at a persistent disk (e.g. /var/data) so bets survive restarts.
-_STORE = Path(os.getenv("BET_LOG_PATH", str(Path(__file__).parent.parent / "data" / "bet_log.json")))
-_STORE.parent.mkdir(parents=True, exist_ok=True)
+from app.config import settings
+
+# Each user's bets live in their own file => fully separate data.
+_DATA = Path(settings.DATA_DIR)
+_DATA.mkdir(parents=True, exist_ok=True)
 
 # Need at least this many settled combos before we trust the reality factor.
 MIN_SAMPLES_FOR_LEARNING = 10
 
 
-def _load() -> List[Dict]:
-    if not _STORE.exists():
+def _store(user: str) -> Path:
+    safe = "".join(c for c in (user or "default") if c.isalnum()) or "default"
+    return _DATA / f"bets_{safe}.json"
+
+
+def _load(user: str) -> List[Dict]:
+    p = _store(user)
+    if not p.exists():
         return []
     try:
-        return json.loads(_STORE.read_text())
+        return json.loads(p.read_text())
     except json.JSONDecodeError:
         return []
 
 
-def _save(bets: List[Dict]) -> None:
-    _STORE.write_text(json.dumps(bets, indent=2))
+def _save(user: str, bets: List[Dict]) -> None:
+    _store(user).write_text(json.dumps(bets, indent=2))
 
 
-def log_bet(combo: Dict, stake: float = 0.0, book: str = "") -> Dict:
+def migrate_legacy(user: str) -> int:
+    """One-time: move pre-accounts bets (single bet_log.json) into the first user's file."""
+    legacy = _DATA / "bet_log.json"
+    target = _store(user)
+    if not legacy.exists() or target.exists():
+        return 0
+    try:
+        data = json.loads(legacy.read_text())
+    except json.JSONDecodeError:
+        return 0
+    if data:
+        target.write_text(json.dumps(data, indent=2))
+    legacy.rename(_DATA / "bet_log.migrated.json")
+    return len(data)
+
+
+def log_bet(user: str, combo: Dict, stake: float = 0.0, book: str = "") -> Dict:
     """Save an evaluated combo as a pending bet."""
-    bets = _load()
+    bets = _load(user)
     entry = {
         "id": uuid.uuid4().hex[:10],
         "created_at": time.time(),
@@ -58,41 +81,41 @@ def log_bet(combo: Dict, stake: float = 0.0, book: str = "") -> Dict:
         "settled_at": None,
     }
     bets.append(entry)
-    _save(bets)
+    _save(user, bets)
     return entry
 
 
-def pending_bets() -> List[Dict]:
-    return [b for b in _load() if b["status"] == "pending"]
+def pending_bets(user: str) -> List[Dict]:
+    return [b for b in _load(user) if b["status"] == "pending"]
 
 
-def settle_bet(bet_id: str, hit: bool) -> Optional[Dict]:
-    bets = _load()
+def settle_bet(user: str, bet_id: str, hit: bool) -> Optional[Dict]:
+    bets = _load(user)
     for b in bets:
         if b["id"] == bet_id:
             b["status"] = "hit" if hit else "miss"
             b["settled_at"] = time.time()
-            _save(bets)
+            _save(user, bets)
             return b
     return None
 
 
-def delete_bet(bet_id: str) -> bool:
-    bets = _load()
+def delete_bet(user: str, bet_id: str) -> bool:
+    bets = _load(user)
     new = [b for b in bets if b["id"] != bet_id]
     if len(new) != len(bets):
-        _save(new)
+        _save(user, new)
         return True
     return False
 
 
-def reality_factor() -> Optional[float]:
+def reality_factor(user: str) -> Optional[float]:
     """
     observed hit rate / predicted hit rate over settled combos.
     <1 means the model is overconfident and we should shrink future estimates.
     None until we have enough samples to mean anything.
     """
-    settled = [b for b in _load() if b["status"] in ("hit", "miss") and b.get("model_prob")]
+    settled = [b for b in _load(user) if b["status"] in ("hit", "miss") and b.get("model_prob")]
     if len(settled) < MIN_SAMPLES_FOR_LEARNING:
         return None
     predicted = sum(b["model_prob"] for b in settled)
@@ -102,8 +125,8 @@ def reality_factor() -> Optional[float]:
     return round(observed / predicted, 3)
 
 
-def stats() -> Dict:
-    bets = _load()
+def stats(user: str) -> Dict:
+    bets = _load(user)
     settled = [b for b in bets if b["status"] in ("hit", "miss")]
     pending = [b for b in bets if b["status"] == "pending"]
     hits = [b for b in settled if b["status"] == "hit"]
@@ -113,7 +136,7 @@ def stats() -> Dict:
                    for b in hits)
     roi = ((returned - staked) / staked) if staked > 0 else None
 
-    rf = reality_factor()
+    rf = reality_factor(user)
     return {
         "total": len(bets),
         "pending": len(pending),

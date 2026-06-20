@@ -20,6 +20,33 @@ body {
   padding-bottom: 60px;
 }
 
+/* login gate */
+.login-gate {
+  position: fixed; inset: 0; z-index: 100; display: none;
+  background: radial-gradient(1000px 500px at 50% 0%, #16203a, var(--bg));
+  align-items: center; justify-content: center; padding: 20px;
+}
+.login-gate.show { display: flex; }
+.login-box {
+  width: 100%; max-width: 360px; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 18px; padding: 30px 26px; text-align: center;
+  display: flex; flex-direction: column; gap: 11px;
+}
+.login-logo {
+  width: 56px; height: 56px; border-radius: 14px; margin: 0 auto 6px;
+  background: linear-gradient(135deg, var(--blue), #7b5cff);
+  display: grid; place-items: center; font-size: 32px; font-weight: 800;
+}
+.login-box h1 { font-size: 21px; }
+.login-sub { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.login-box input { width: 100%; text-align: left; }
+.login-box .btn { width: 100%; }
+.login-error { color: var(--red); font-size: 12.5px; min-height: 16px; }
+.login-note { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+.user-tag { font-size: 12px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.user-tag a { color: var(--muted); cursor: pointer; text-decoration: underline; }
+.user-tag a:hover { color: var(--red); }
+
 /* topbar */
 .topbar {
   display: flex; justify-content: space-between; align-items: center;
