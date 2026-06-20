@@ -240,6 +240,9 @@ input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px #4
 
 /* auto-bet */
 .ab-warn { background: #f5a6231a; border: 1px solid #f5a62355; color: #f5c77e; border-radius: 12px; padding: 14px 16px; font-size: 13px; line-height: 1.55; margin-bottom: 16px; }
+.ab-notify { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 13px 16px; font-size: 13px; margin-bottom: 14px; }
+.ab-notify b { color: var(--blue); word-break: break-all; }
+.ab-notify .btn { padding: 5px 12px; margin-left: 6px; }
 .ab-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 14px; margin: 18px 0; }
 .ab-form label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
 .ab-form select, .ab-form input { width: 100%; }

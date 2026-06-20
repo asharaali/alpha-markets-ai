@@ -21,6 +21,7 @@ document.querySelectorAll(".tab").forEach((t) => {
 async function loadAutobet() {
   const d = await (await fetch(`${API}/api/autobet`)).json();
   const c = d.config;
+  if (document.getElementById("abTopic")) document.getElementById("abTopic").textContent = currentTopic || "—";
   document.getElementById("abEnabled").value = String(c.enabled);
   document.getElementById("abMode").value = c.mode;
   document.getElementById("abMaxStake").value = c.max_stake;
@@ -61,6 +62,10 @@ document.getElementById("abSave").addEventListener("click", async () => {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   loadAutobet();
+});
+document.getElementById("abTestPush").addEventListener("click", async () => {
+  const d = await (await fetch(`${API}/api/notify/test`, { method: "POST" })).json();
+  alert(d.sent ? `Test sent to topic:\n${d.topic}\n\nIf your phone didn't buzz, subscribe to that topic in the ntfy app.` : "Couldn't send — notifications may be off.");
 });
 document.getElementById("abVerify").addEventListener("click", async () => {
   const out = document.getElementById("abVerifyOut");
