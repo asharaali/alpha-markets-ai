@@ -9,6 +9,7 @@ tiny one (the $10 hard cap limits any blast radius) and watched closely.
 """
 from __future__ import annotations
 import base64
+import os
 import time
 import uuid
 
@@ -18,6 +19,11 @@ from app.config import settings
 from app.data_sources.kalshi_orderbook import orderbook_prices
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
+# V2 order endpoint (the old /portfolio/orders was deprecated -> 410). New shape: side bid/ask
+# from the YES book, fixed-point dollar price/count strings. Host overridable via env in case
+# prod differs from the documented one.
+ORDER_BASE = os.getenv("KALSHI_ORDER_BASE", "https://external-api.kalshi.com/trade-api/v2").rstrip("/")
+ORDER_PATH = "/trade-api/v2/portfolio/events/orders"
 
 
 def _signed_headers(method: str, path: str):
@@ -74,9 +80,11 @@ async def _find_market(home: str, away: str, selection: str):
 
 async def place_order(ticker: str, side: str, stake_dollars: float):
     """
-    Buy `side` ('yes'|'no') contracts on a specific Kalshi market for ~stake_dollars.
-    Prices off the live ORDERBOOK (the markets-list yes_ask is always null — that bug is
-    what made every order fail with 'no live ask price'). Returns (ok, info).
+    Buy `side` ('yes'|'no') contracts on a specific Kalshi market for ~stake_dollars, using
+    the V2 order endpoint. Everything is quoted from the YES book: buying YES is a 'bid' at
+    the yes-ask; buying NO is an 'ask' (sell YES) at the yes-bid. We send an immediate-or-
+    cancel order priced AT the book, so it behaves like a market order but can never fill at
+    a worse price than we saw. Returns (ok, info).
     """
     if not (settings.KALSHI_KEY_ID and settings.KALSHI_PRIVATE_KEY):
         return False, "no Kalshi key configured"
@@ -84,21 +92,29 @@ async def place_order(ticker: str, side: str, stake_dollars: float):
     try:
         async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "AlphaMarketsAI/1.0"}) as c:
             yes_bid, yes_ask, depth = await orderbook_prices(c, ticker)
-            # Cost to buy the side you want: YES at the yes ask, NO at (1 - yes bid).
-            price = yes_ask if side == "yes" else ((1 - yes_bid) if yes_bid is not None else None)
-            if not price:
-                return False, "no live ask price (empty/illiquid order book)"
-            cents = round(price * 100)
-            count = int(stake_dollars / price)
+            if side == "yes":
+                v2_side, yes_price, cost = "bid", yes_ask, yes_ask           # pay the ask
+            else:                                                            # buy NO == sell YES at the bid
+                v2_side, yes_price, cost = "ask", yes_bid, (1 - yes_bid) if yes_bid is not None else None
+            if not yes_price or not cost:
+                return False, "no live price (empty/illiquid order book)"
+            count = int(stake_dollars / cost)
             if count < 1:
-                return False, f"stake ${stake_dollars} too small for one contract at {cents}¢"
-            path = "/trade-api/v2/portfolio/orders"
-            body = {"ticker": ticker, "action": "buy", "side": side,
-                    "count": count, "type": "market", "client_order_id": uuid.uuid4().hex}
-            r = await c.post(f"{BASE}/portfolio/orders", headers=_signed_headers("POST", path), json=body)
+                return False, f"stake ${stake_dollars} too small for one contract at {round(cost*100)}¢"
+            body = {
+                "ticker": ticker,
+                "side": v2_side,
+                "count": str(count),
+                "price": f"{yes_price:.4f}",                # fixed-point dollars (YES price)
+                "time_in_force": "immediate_or_cancel",      # take now, don't rest
+                "self_trade_prevention_type": "taker_at_cross",
+                "client_order_id": uuid.uuid4().hex,
+            }
+            r = await c.post(f"{ORDER_BASE}/portfolio/events/orders",
+                             headers=_signed_headers("POST", ORDER_PATH), json=body)
         if r.status_code in (200, 201):
-            return True, f"bought {count} {side.upper()} @ ~{cents}¢ on {ticker}"
-        return False, f"Kalshi rejected ({r.status_code}): {r.text[:140]}"
+            return True, f"bought {count} {side.upper()} @ ~{round(cost*100)}¢ on {ticker}"
+        return False, f"Kalshi rejected ({r.status_code}): {r.text[:160]}"
     except Exception as exc:
         return False, f"error: {exc}"
 

@@ -165,7 +165,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "orderbook-fix-weather-autobet-v5",
+        "build": "kalshi-v2-orders-v6",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
