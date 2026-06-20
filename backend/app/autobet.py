@@ -78,7 +78,16 @@ def _load_log(user) -> List[Dict]:
 
 
 def _save_log(user, log): _log_path(user).write_text(json.dumps(log, indent=2))
-def today_bets(user): return [b for b in _load_log(user) if b.get("day") == _today()]
+
+
+def _succeeded(b) -> bool:
+    """A bet only counts toward budget/limits if it actually went down (paper or live fill).
+    A failed live order (no liquidity, rejected) spent nothing, so it must NOT consume the cap."""
+    return "failed" not in (b.get("status") or "").lower()
+
+
+def _today_attempts(user): return [b for b in _load_log(user) if b.get("day") == _today()]
+def today_bets(user): return [b for b in _today_attempts(user) if _succeeded(b)]
 def today_spend(user): return round(sum(b.get("stake", 0) for b in today_bets(user)), 2)
 
 
@@ -102,8 +111,10 @@ async def scan_and_place(user: str, matches: List[Dict]) -> List[Dict]:
     if not cfg["enabled"]:
         return []
     log = _load_log(user)
-    done = {(b["home"], b["away"], b["selection"]) for b in log if b.get("day") == _today()}
-    spend, count, placed = today_spend(user), len(today_bets(user)), []
+    # Don't re-attempt a (game, selection) already tried today — success OR fail. A failed
+    # market (no liquidity) stays remembered so we don't hammer a dead book every pass.
+    done = {(b["home"], b["away"], b["selection"]) for b in _today_attempts(user)}
+    spend, count, placed, dirty = today_spend(user), len(today_bets(user)), [], False
 
     for m in matches:
         if m.get("status") != "upcoming":     # never chase in-play; pre-match only
@@ -134,9 +145,12 @@ async def scan_and_place(user: str, matches: List[Dict]) -> List[Dict]:
                 entry["status"] = "paper ✓"
             log.append(entry)
             placed.append(entry)
-            spend += stake
-            count += 1
             done.add(key)
-    if placed:
+            dirty = True
+            # ONLY a real fill consumes the budget — a failed order spent nothing.
+            if _succeeded(entry):
+                spend += stake
+                count += 1
+    if dirty:
         _save_log(user, log)
     return placed
