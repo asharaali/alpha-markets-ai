@@ -131,6 +131,11 @@ document.getElementById("abTestPush").addEventListener("click", async () => {
   const d = await (await fetch(`${API}/api/notify/test`, { method: "POST" })).json();
   alert(d.sent ? `Test sent to topic:\n${d.topic}\n\nIf your phone didn't buzz, subscribe to that topic in the ntfy app.` : "Couldn't send — notifications may be off.");
 });
+document.getElementById("abPreview").addEventListener("click", async () => {
+  const d = await (await fetch(`${API}/api/notify/preview`, { method: "POST" })).json();
+  alert(`Fired ${d.sent}/${d.of} real game alerts to your phone (kickoff, goal, heads-up, cash-out).\n`
+    + `These use the exact same code the live monitor uses during a game. If they buzz, game-time will too.`);
+});
 document.getElementById("abVerify").addEventListener("click", async () => {
   const out = document.getElementById("abVerifyOut");
   out.textContent = "Checking…";

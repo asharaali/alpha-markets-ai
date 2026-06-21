@@ -173,7 +173,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "emoji-header-fix-v10",
+        "build": "alert-preview-v11",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -393,6 +393,24 @@ def notify_test(request: Request):
     ok = send_push("🔔 You're connected — alerts for cash-out and live parlay swings are ON.",
                    title="Alpha Markets AI", tags=["bell"], topic=topic)
     return {"sent": ok, "topic": topic}
+
+
+@app.post("/api/notify/preview")
+def notify_preview(request: Request):
+    """Fire one of EACH real game-time alert to your phone, using the exact same send path
+    the live monitor uses — so you can see what kickoff/goal/sliding/cash-out look like now."""
+    topic = (auth.get_user(request.state.user) or {}).get("ntfy_topic")
+    sent = 0
+    sent += send_push("Kickoff — now tracking your parlay live. I'll ping you if it turns.",
+                      title="⚽ Game on", priority="low", tags=["soccer"], topic=topic)
+    sent += send_push("GOAL — Germany scored! Germany 1-0 Ivory Coast (23'). Watching your parlay.",
+                      title="⚽ GOAL", tags=["soccer"], topic=topic)
+    sent += send_push("Your parlay is turning — down to 38% (from 64%). Consider cashing out NOW "
+                      "while it still has value.", title="🟠 Heads up — cash out?",
+                      priority="high", tags=["warning"], topic=topic)
+    sent += send_push("Your parlay is slipping — live 12% (was 64%). CASH OUT.",
+                      title="🔴 CASH OUT", priority="high", tags=["rotating_light"], topic=topic)
+    return {"sent": sent, "of": 4, "topic": topic}
 
 
 # ---------- background push-notification monitor ----------
