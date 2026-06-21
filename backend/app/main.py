@@ -165,7 +165,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "test-order-button-v7",
+        "build": "early-warning-tracking-v8",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -267,7 +267,22 @@ async def parlay_auto(req: AutoParlayRequest, request: Request):
 @app.post("/api/combo/log")
 def combo_log(req: LogBetRequest, request: Request):
     """Save a combo as a pending bet so you can settle it later."""
-    return bet_log.log_bet(request.state.user, req.combo, req.stake, req.book)
+    entry = bet_log.log_bet(request.state.user, req.combo, req.stake, req.book)
+    # Confirm on the phone that it's armed — and warn loudly if it CAN'T be tracked live
+    # (manual legs with no game data => the monitor can't watch it => no cash-out alerts).
+    legs = entry.get("legs", [])
+    trackable = bool(legs) and all(isinstance(l, dict) and l.get("home") and l.get("away") for l in legs)
+    topic = (auth.get_user(request.state.user) or {}).get("ntfy_topic")
+    if topic:
+        if trackable:
+            send_push(f"{_legtext({'legs': legs})} — logged. I'm watching it live: goal + cash-out alerts are ON.",
+                      title="✅ Tracking your bet", tags=["eyes"], topic=topic)
+        else:
+            send_push("Logged — but this bet was entered manually so I CAN'T track it live or alert you to "
+                      "cash out. Re-add it with the game→market→pick dropdowns to get live alerts.",
+                      title="⚠️ Not tracked live", priority="high", tags=["warning"], topic=topic)
+    entry["trackable"] = trackable
+    return entry
 
 
 @app.post("/api/combo/settle")
@@ -418,7 +433,11 @@ async def _notify_loop():
                                           title="⚽ GOAL", tags=["soccer"], topic=topic)
                             _score_state[gkey] = sig
 
+                        # "sliding" = lost a real chunk of its value but not yet collapsed —
+                        # this is the EARLY warning so he can still cash out for something.
+                        sliding = s["any_live"] and not s["cash_out"] and s.get("health", 1) < 0.78
                         bucket = ("cashout" if s["cash_out"]
+                                  else "sliding" if sliding
                                   else "great" if (s["any_live"] and s["live_prob"] >= 0.85)
                                   else "live" if s["any_live"] else "idle")
                         if bucket != _notify_state.get(s["id"]):
@@ -426,6 +445,10 @@ async def _notify_loop():
                                 send_push(f"{_legtext(s)} is slipping — live {s['live_prob']*100:.0f}% "
                                           f"(was {s['entry_prob']*100:.0f}%). {s['action']}.",
                                           title="🔴 CASH OUT", priority="high", tags=["rotating_light"], topic=topic)
+                            elif bucket == "sliding":
+                                send_push(f"{_legtext(s)} is turning — down to {s['live_prob']*100:.0f}% "
+                                          f"(from {s['entry_prob']*100:.0f}%). Consider cashing out NOW while it still has value.",
+                                          title="🟠 Heads up — cash out?", priority="high", tags=["warning"], topic=topic)
                                 # Dead parlay? Hand him the next best play so there's no dead end.
                                 if "DEAD" in s["action"]:
                                     await _bounce_back(username, topic)
