@@ -145,6 +145,14 @@ class AutoParlayRequest(BaseModel):
     legs: Optional[int] = None   # None => tier decides leg count
 
 
+class ManualBetRequest(BaseModel):
+    description: str
+    stake: float = 0.0
+    hit: bool
+    odds: float = 0.0
+    book: str = ""
+
+
 class CashoutRequest(BaseModel):
     entry_price: float
     current_market_price: float
@@ -165,7 +173,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "early-warning-tracking-v8",
+        "build": "manual-past-bet-v9",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -283,6 +291,13 @@ def combo_log(req: LogBetRequest, request: Request):
                       title="⚠️ Not tracked live", priority="high", tags=["warning"], topic=topic)
     entry["trackable"] = trackable
     return entry
+
+
+@app.post("/api/bets/manual")
+def bets_manual(req: ManualBetRequest, request: Request):
+    """Log an already-finished bet straight into the record (past games the builder can't reach)."""
+    return bet_log.log_manual_bet(request.state.user, req.description, req.stake,
+                                  req.hit, req.odds, req.book)
 
 
 @app.post("/api/combo/settle")

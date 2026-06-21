@@ -493,6 +493,28 @@ function kalshiCard(g) {
 
 /* ---------- Record / learning ---------- */
 let recordPoll = null;
+document.getElementById("mbAdd").addEventListener("click", async () => {
+  const desc = document.getElementById("mbDesc").value.trim();
+  if (!desc) return alert("Describe the bet first.");
+  const body = {
+    description: desc,
+    stake: parseFloat(document.getElementById("mbStake").value) || 0,
+    odds: parseFloat(document.getElementById("mbOdds").value) || 0,
+    hit: document.getElementById("mbResult").value === "hit",
+  };
+  const btn = document.getElementById("mbAdd");
+  btn.disabled = true; btn.textContent = "Adding…";
+  try {
+    const res = await fetch(`${API}/api/bets/manual`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!res.ok) { alert(`Couldn't add (${res.status}).`); return; }
+    document.getElementById("mbDesc").value = "";
+    document.getElementById("manualBetBox").open = false;
+    await loadRecord();
+  } finally { btn.disabled = false; btn.textContent = "Add to record"; }
+});
+
 async function loadRecord() {
   const [d, live] = await Promise.all([
     (await fetch(`${API}/api/bets`)).json(),

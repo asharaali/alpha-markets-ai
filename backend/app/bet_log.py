@@ -85,6 +85,31 @@ def log_bet(user: str, combo: Dict, stake: float = 0.0, book: str = "") -> Dict:
     return entry
 
 
+def log_manual_bet(user: str, description: str, stake: float, hit: bool,
+                   odds: float = 0.0, book: str = "") -> Dict:
+    """Log an ALREADY-SETTLED past bet straight into the record (for games that already
+    finished — the combo builder only handles upcoming games). Counts toward record/ROI."""
+    bets = _load(user)
+    entry = {
+        "id": uuid.uuid4().hex[:10],
+        "created_at": time.time(),
+        "book": book,
+        "legs": [{"label": description}],   # text-only leg (not live-trackable; it's done)
+        "leg_count": None,
+        "model_prob": None,                 # no model prob -> excluded from reality factor
+        "odds": odds or None,
+        "payout_multiple": odds or None,
+        "ev_per_dollar": None,
+        "stake": stake,
+        "manual": True,
+        "status": "hit" if hit else "miss",
+        "settled_at": time.time(),
+    }
+    bets.append(entry)
+    _save(user, bets)
+    return entry
+
+
 def pending_bets(user: str) -> List[Dict]:
     return [b for b in _load(user) if b["status"] == "pending"]
 
@@ -125,6 +150,12 @@ def reality_factor(user: str) -> Optional[float]:
     return round(observed / predicted, 3)
 
 
+def _avg_model_prob(settled: List[Dict]):
+    """Average model prob over settled bets that HAVE one (manual past bets don't)."""
+    ps = [b["model_prob"] for b in settled if b.get("model_prob") is not None]
+    return round(sum(ps) / len(ps), 3) if ps else None
+
+
 def stats(user: str) -> Dict:
     bets = _load(user)
     settled = [b for b in bets if b["status"] in ("hit", "miss")]
@@ -144,7 +175,7 @@ def stats(user: str) -> Dict:
         "hits": len(hits),
         "misses": len(settled) - len(hits),
         "hit_rate": round(len(hits) / len(settled), 3) if settled else None,
-        "avg_model_prob": round(sum(b["model_prob"] for b in settled) / len(settled), 3) if settled else None,
+        "avg_model_prob": _avg_model_prob(settled),
         "staked": round(staked, 2),
         "returned": round(returned, 2),
         "net": round(returned - staked, 2),
