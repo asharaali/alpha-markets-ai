@@ -131,6 +131,19 @@ document.getElementById("abTestPush").addEventListener("click", async () => {
   const d = await (await fetch(`${API}/api/notify/test`, { method: "POST" })).json();
   alert(d.sent ? `Test sent to topic:\n${d.topic}\n\nIf your phone didn't buzz, subscribe to that topic in the ntfy app.` : "Couldn't send — notifications may be off.");
 });
+document.getElementById("abDiagnose").addEventListener("click", async () => {
+  const out = document.getElementById("abDiagnoseOut");
+  out.textContent = "Checking…";
+  const d = await (await fetch(`${API}/api/notify/diagnose`)).json();
+  const betLines = (d.your_bets || []).map((b) =>
+    `• ${b.trackable ? "✅ tracked" : "⚠️ NOT tracked"} — ${b.games.join(", ") || b.legs.join(" + ")} `
+    + `(${b.any_live ? "LIVE: " + b.action : "not live yet"})`).join("<br>");
+  out.innerHTML = `<b>${d.verdict}</b><br>`
+    + `Topic: <b>${d.topic || "none"}</b> · alerts ${d.notify_enabled ? "ON" : "OFF"} · `
+    + `monitor ${d.monitor_running ? "running ✅" : "NOT running ❌"} (last ran ${d.monitor_last_ran_secs_ago}s ago)<br>`
+    + `Pending bets: <b>${d.pending_bet_count}</b><br>${betLines}<br>`
+    + `<span class="muted">Live games right now: ${d.live_games_now.join(", ") || "none"}</span>`;
+});
 document.getElementById("abPreview").addEventListener("click", async () => {
   const d = await (await fetch(`${API}/api/notify/preview`, { method: "POST" })).json();
   alert(`Fired ${d.sent}/${d.of} real game alerts to your phone (kickoff, goal, heads-up, cash-out).\n`

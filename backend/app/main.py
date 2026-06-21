@@ -173,7 +173,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "alert-preview-v11",
+        "build": "notify-diagnose-v12",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -413,9 +413,51 @@ def notify_preview(request: Request):
     return {"sent": sent, "of": 4, "topic": topic}
 
 
+@app.get("/api/notify/diagnose")
+async def notify_diagnose(request: Request):
+    """X-ray of why you are (or aren't) getting alerts: your topic, your pending bets, whether
+    each is trackable, which of their games are live right now, and if the monitor is running."""
+    import time as _t
+    user = request.state.user
+    topic = (auth.get_user(user) or {}).get("ntfy_topic")
+    pend = bet_log.pending_bets(user)
+    scores = await get_live_scores()
+    live_pairs = {(s.get("home_team"), s.get("away_team")) for s in (scores or []) if not s.get("completed")}
+    statuses = monitor_live_bets(scores or [], user)
+    bets = []
+    for b in pend:
+        legs = b.get("legs", [])
+        trackable = bool(legs) and all(isinstance(l, dict) and l.get("home") and l.get("away") for l in legs)
+        st = next((s for s in statuses if s["id"] == b["id"]), None)
+        bets.append({
+            "id": b["id"], "stake": b.get("stake"), "trackable": trackable,
+            "legs": [l.get("label") if isinstance(l, dict) else str(l) for l in legs],
+            "games": [f"{l.get('home')} v {l.get('away')}" for l in legs if isinstance(l, dict) and l.get("home")],
+            "any_live": st["any_live"] if st else False,
+            "action": st["action"] if st else "—",
+        })
+    beat_age = round(_t.time() - _loop_beat["ts"], 1) if _loop_beat["ts"] else None
+    return {
+        "topic": topic,
+        "notify_enabled": settings.NOTIFY_ENABLED,
+        "monitor_running": beat_age is not None and beat_age < 300,
+        "monitor_last_ran_secs_ago": beat_age,
+        "monitor_iterations": _loop_beat["iterations"],
+        "pending_bet_count": len(pend),
+        "live_games_now": sorted(f"{h} v {a}" for h, a in live_pairs),
+        "your_bets": bets,
+        "verdict": (
+            "No pending bets logged — there's nothing to track. Log a bet via the Combo Builder dropdowns." if not pend
+            else "You have bets but none are trackable — re-log via the game→market→pick dropdowns (not manual entry)." if not any(b["trackable"] for b in bets)
+            else "Bets are tracked. You'll get alerts when their games go live and the score/odds move."
+        ),
+    }
+
+
 # ---------- background push-notification monitor ----------
 _notify_state: dict = {}   # bet_id -> last bucket sent
 _score_state: dict = {}    # (home, away) -> last (home_goals, away_goals) seen
+_loop_beat: dict = {"ts": 0.0, "iterations": 0}   # proves the loop is alive on the cloud
 
 
 def _legtext(status) -> str:
@@ -439,9 +481,12 @@ async def _bounce_back(username: str, topic: str):
 
 
 async def _notify_loop():
+    import time as _t
     await asyncio.sleep(5)
     while True:
         delay = 300
+        _loop_beat["ts"] = _t.time()
+        _loop_beat["iterations"] += 1
         try:
             # Only fetch scores once, then check every user's bets against them.
             users_with_bets = [u for u in auth.all_usernames() if bet_log.pending_bets(u)]
