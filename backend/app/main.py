@@ -173,7 +173,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "manual-past-bet-v9",
+        "build": "emoji-header-fix-v10",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
