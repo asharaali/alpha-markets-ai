@@ -26,7 +26,8 @@ from app import weather_calibration
 from app.analysis import (analyze_match, evaluate_combo, cashout_decision,
                           monitor_live_bets, build_auto_parlay, build_optimal_parlay,
                           next_best_tips, _legset)
-from app.soccer_model import match_probabilities, update_after_result, MODEL_INFO, extended_markets
+from app.soccer_model import (match_probabilities, update_after_result, MODEL_INFO,
+                              extended_markets, live_leg_probability)
 from app import bet_log
 from app import autobet
 from app.notifications import send_push
@@ -173,7 +174,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "earlier-cashout-v13",
+        "build": "kalshi-cashout-sync-v14",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -571,6 +572,48 @@ async def _start_monitor():
 def cashout(req: CashoutRequest):
     return cashout_decision(
         req.entry_price, req.current_market_price, req.model_prob, req.stake)
+
+
+class LiveCashoutRequest(BaseModel):
+    home: str
+    away: str
+    selection: str
+    entry_price: float          # what you paid for YES (0-1)
+    stake: float = 100.0
+
+
+@app.post("/api/cashout/live")
+async def cashout_live(req: LiveCashoutRequest):
+    """Pull the REAL live Kalshi cash-out (sell) price for a position and run the decision
+    against the model's current fair value — actual money, not a typed-in guess."""
+    from app.kalshi_trade import live_cashout_price
+    info = await live_cashout_price(req.home, req.away, req.selection)
+    if not info:
+        return {"ok": False, "error": "No matching open Kalshi market for that game/selection."}
+    if not info.get("cashout_price"):
+        return {"ok": False, "error": "That Kalshi market has no live sell price right now (thin book).",
+                "ticker": info["ticker"]}
+    # Model's current fair value for this selection (live if the game's in play, else pre-match).
+    scores = await get_live_scores()
+    g = next((s for s in (scores or []) if s.get("home_team") == req.home and s.get("away_team") == req.away), None)
+    model_prob = info["market_yes"]   # fallback: market mid
+    try:
+        if g and not g.get("completed") and g.get("scores"):
+            sm = {x["name"]: int(x.get("score") or 0) for x in g["scores"]}
+            from app.data_sources.odds_api import _estimate_minute
+            p, trk = live_leg_probability(req.home, req.away, sm.get(req.home, 0), sm.get(req.away, 0),
+                                          _estimate_minute(g.get("commence_time", "")), "Match Result", req.selection)
+            if trk and p is not None:
+                model_prob = p
+        else:
+            mp = match_probabilities(req.home, req.away)["probs"]
+            model_prob = {"Draw": mp["draw"]}.get(req.selection, mp["home"] if req.selection == req.home else mp["away"])
+    except Exception:
+        pass
+    decision = cashout_decision(req.entry_price, info["cashout_price"], model_prob, req.stake)
+    decision.update(ok=True, ticker=info["ticker"], live_cashout_price=info["cashout_price"],
+                    book_depth=info["depth"], source="live Kalshi order book")
+    return decision
 
 
 @app.post("/api/result")

@@ -78,6 +78,29 @@ async def _find_market(home: str, away: str, selection: str):
     return None
 
 
+async def live_cashout_price(home: str, away: str, selection: str):
+    """
+    The REAL price you could cash out a position for right now, from the live Kalshi book.
+    A position is YES on its selection; cashing out = SELLING your YES into the current bid.
+    Returns {ticker, cashout_price (0-1, what you'd get selling YES), market_yes (current
+    fair-ish mid), depth} or None if the market can't be found / has no book.
+    """
+    mk = await _find_market(home, away, selection)
+    if not mk:
+        return None
+    async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "AlphaMarketsAI/1.0"}) as c:
+        yes_bid, yes_ask, depth = await orderbook_prices(c, mk["ticker"])
+    if yes_bid is None and yes_ask is None:
+        return {"ticker": mk["ticker"], "cashout_price": None, "market_yes": None, "depth": depth}
+    mid = ((yes_bid + yes_ask) / 2) if (yes_bid and yes_ask) else (yes_bid or yes_ask)
+    return {
+        "ticker": mk["ticker"],
+        "cashout_price": yes_bid,   # what you can SELL your YES for right now
+        "market_yes": round(mid, 4) if mid else None,
+        "depth": depth,
+    }
+
+
 async def place_order(ticker: str, side: str, stake_dollars: float):
     """
     Buy `side` ('yes'|'no') contracts on a specific Kalshi market for ~stake_dollars, using

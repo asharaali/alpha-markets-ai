@@ -16,7 +16,49 @@ document.querySelectorAll(".tab").forEach((t) => {
     if (t.dataset.tab === "autobet") loadAutobet();
     if (t.dataset.tab === "combo") loadComboGames();
     if (t.dataset.tab === "weather") loadWeather();
+    if (t.dataset.tab === "cashout") loadCashoutGames();
   });
+});
+
+/* ---------- live Kalshi cash-out sync ---------- */
+let _coGames = [];
+async function loadCashoutGames() {
+  if (_coGames.length) return;
+  try {
+    const d = await (await fetch(`${API}/api/matches`)).json();
+    _coGames = (d.matches || []).filter((m) => m.status !== "completed");
+    const sel = document.getElementById("coGame");
+    sel.innerHTML = `<option value="">choose game…</option>`
+      + _coGames.map((m, i) => `<option value="${i}">${m.home} v ${m.away}</option>`).join("");
+  } catch (e) {}
+}
+document.getElementById("coGame").addEventListener("change", (e) => {
+  const m = _coGames[e.target.value];
+  const s = document.getElementById("coSel");
+  if (!m) { s.innerHTML = `<option value="">side…</option>`; return; }
+  s.innerHTML = [m.home, "Draw", m.away].map((x) => `<option value="${x}">${x}</option>`).join("");
+});
+document.getElementById("coLivePull").addEventListener("click", async () => {
+  const m = _coGames[document.getElementById("coGame").value];
+  const selection = document.getElementById("coSel").value;
+  const entry = parseFloat(document.getElementById("coLiveEntry").value);
+  const out = document.getElementById("coLiveOut");
+  if (!m || !selection || !entry) return (out.textContent = "Pick a game, side, and your entry price first.");
+  out.textContent = "Pulling live Kalshi price…";
+  const d = await (await fetch(`${API}/api/cashout/live`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ home: m.home, away: m.away, selection, entry_price: entry, stake: parseFloat(document.getElementById("coStake").value) || 100 }),
+  })).json();
+  if (!d.ok) return (out.innerHTML = `❌ ${d.error}`);
+  const cls = d.action.includes("CASH OUT") || d.action.includes("EXIT") ? "var(--red)" : d.action.includes("HOLD") ? "var(--green)" : "var(--text)";
+  out.innerHTML = `<b style="color:${cls};font-size:15px">${d.action}</b> — ${d.reason}<br>`
+    + `Live Kalshi cash-out: <b>${Math.round(d.live_cashout_price * 100)}¢</b> · you paid ${Math.round(entry * 100)}¢ · `
+    + `P&L <b>${d.unrealized_pnl_pct > 0 ? "+" : ""}${d.unrealized_pnl_pct}%</b> · model fair ${Math.round(d.model_fair_value * 100)}¢ · depth $${d.book_depth}<br>`
+    + `<span class="muted">${d.ticker} · ${d.source}</span>`;
+  // also fill the manual fields so the big "Check position" matches
+  document.getElementById("coEntry").value = entry;
+  document.getElementById("coCurrent").value = d.live_cashout_price;
+  document.getElementById("coModel").value = d.model_fair_value;
 });
 
 /* ---------- weather markets ---------- */
