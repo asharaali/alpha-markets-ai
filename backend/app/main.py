@@ -173,7 +173,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "notify-diagnose-v12",
+        "build": "earlier-cashout-v13",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -538,7 +538,7 @@ async def _notify_loop():
                                 send_push(f"Kickoff — now tracking {_legtext(s)} live. I'll ping you if it turns.",
                                           title="⚽ Game on", priority="low", tags=["soccer"], topic=topic)
                             _notify_state[s["id"]] = bucket
-                delay = 45 if any_live else 120
+                delay = 22 if any_live else 120   # poll fast during live games so alerts aren't stale
 
             # Auto-bet pass for users who've armed it (paper or live).
             autobet_users = [u for u in auth.all_usernames() if autobet.get_config(u)["enabled"]]

@@ -396,9 +396,12 @@ def monitor_live_bets(scores: List[Dict], user: str) -> List[Dict]:
 
         entry_comb = b.get("model_prob") or 0.0001
         health = combined_live / entry_comb if entry_comb else 1.0
+        # Cash out EARLIER: fire when the parlay has lost ~30% of its value (health<0.70),
+        # not 45%. The exchange price tracks probability, so warning sooner = you still get
+        # real cash-out value instead of pennies on a near-dead ticket.
         if dead:
             action, cash_out = "DEAD — leg already lost", True
-        elif any_live and (combined_live < entry_comb * 0.55 or combined_live < 0.10):
+        elif any_live and (combined_live < entry_comb * 0.70 or combined_live < 0.12):
             action, cash_out = "CASH OUT", True
         elif any_live and combined_live >= entry_comb:
             action, cash_out = "ON TRACK", False
