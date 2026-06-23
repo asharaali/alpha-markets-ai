@@ -110,6 +110,17 @@ def log_manual_bet(user: str, description: str, stake: float, hit: bool,
     return entry
 
 
+def update_bet(user: str, bet_id: str, fields: Dict) -> Optional[Dict]:
+    """Patch fields onto a stored bet (e.g. its Kalshi ticker + entry price for live P&L)."""
+    bets = _load(user)
+    for b in bets:
+        if b["id"] == bet_id:
+            b.update(fields)
+            _save(user, bets)
+            return b
+    return None
+
+
 def pending_bets(user: str) -> List[Dict]:
     return [b for b in _load(user) if b["status"] == "pending"]
 

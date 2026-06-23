@@ -174,7 +174,7 @@ class ResultRequest(BaseModel):
 def health():
     return {
         "status": "ok",
-        "build": "kalshi-cashout-sync-v14",
+        "build": "kalshi-cashout-alerts-v15",
         "demo_mode": settings.DEMO_MODE,
         "live_data": not settings.DEMO_MODE,
         "kelly_fraction": settings.KELLY_FRACTION,
@@ -274,13 +274,25 @@ async def parlay_auto(req: AutoParlayRequest, request: Request):
 
 
 @app.post("/api/combo/log")
-def combo_log(req: LogBetRequest, request: Request):
+async def combo_log(req: LogBetRequest, request: Request):
     """Save a combo as a pending bet so you can settle it later."""
     entry = bet_log.log_bet(request.state.user, req.combo, req.stake, req.book)
     # Confirm on the phone that it's armed — and warn loudly if it CAN'T be tracked live
     # (manual legs with no game data => the monitor can't watch it => no cash-out alerts).
     legs = entry.get("legs", [])
     trackable = bool(legs) and all(isinstance(l, dict) and l.get("home") and l.get("away") for l in legs)
+    # Phase 2: for a SINGLE-LEG match-result bet, capture the live Kalshi market price now as
+    # the cost basis + remember the ticker, so live alerts can show real cash-out P&L.
+    if len(legs) == 1 and legs[0].get("market") == "Match Result":
+        try:
+            from app.kalshi_trade import live_cashout_price
+            lg = legs[0]
+            info = await live_cashout_price(lg["home"], lg["away"], lg["selection"])
+            if info and info.get("market_yes"):
+                bet_log.update_bet(request.state.user, entry["id"],
+                                   {"kalshi_ticker": info["ticker"], "kalshi_entry": info["market_yes"]})
+        except Exception as exc:
+            print(f"[combo_log] kalshi entry capture failed: {exc}")
     topic = (auth.get_user(request.state.user) or {}).get("ntfy_topic")
     if topic:
         if trackable:
@@ -466,6 +478,26 @@ def _legtext(status) -> str:
     return " + ".join(labels)[:90] or "your parlay"
 
 
+async def _real_kalshi_pnl(bet: dict):
+    """For a single-leg match-result bet with a captured Kalshi entry, pull the live sell
+    price + real P&L. Returns {price, pnl_pct, entry} or None. Phase 2 of cash-out sync."""
+    legs = bet.get("legs", [])
+    if len(legs) != 1 or not bet.get("kalshi_entry"):
+        return None
+    lg = legs[0]
+    try:
+        from app.kalshi_trade import live_cashout_price
+        info = await live_cashout_price(lg.get("home"), lg.get("away"), lg.get("selection"))
+    except Exception:
+        return None
+    if not info or not info.get("cashout_price"):
+        return None
+    entry = bet["kalshi_entry"]
+    price = info["cashout_price"]
+    pnl = round((price - entry) / entry * 100, 1) if entry else 0
+    return {"price": price, "pnl_pct": pnl, "entry": entry}
+
+
 async def _bounce_back(username: str, topic: str):
     """After a parlay dies, immediately push the strongest fresh play to bet next."""
     try:
@@ -496,6 +528,7 @@ async def _notify_loop():
                 any_live = False
                 for username in users_with_bets:
                     topic = (auth.get_user(username) or {}).get("ntfy_topic")
+                    bets_by_id = {b["id"]: b for b in bet_log.pending_bets(username)}
                     for s in monitor_live_bets(scores or [], username):
                         if s["any_live"]:
                             any_live = True
@@ -520,17 +553,22 @@ async def _notify_loop():
                                   else "great" if (s["any_live"] and s["live_prob"] >= 0.85)
                                   else "live" if s["any_live"] else "idle")
                         if bucket != _notify_state.get(s["id"]):
+                            # Phase 2: real Kalshi cash-out price + P&L for single-leg positions.
+                            real = await _real_kalshi_pnl(bets_by_id.get(s["id"], {})) if bucket in ("cashout", "sliding") else None
+                            real_txt = (f" 💵 Sell on Kalshi at {round(real['price']*100)}¢ now "
+                                        f"({'+' if real['pnl_pct'] >= 0 else ''}{real['pnl_pct']}% vs your {round(real['entry']*100)}¢ entry)."
+                                        if real else "")
                             if bucket == "cashout":
                                 send_push(f"{_legtext(s)} is slipping — live {s['live_prob']*100:.0f}% "
-                                          f"(was {s['entry_prob']*100:.0f}%). {s['action']}.",
+                                          f"(was {s['entry_prob']*100:.0f}%). {s['action']}.{real_txt}",
                                           title="🔴 CASH OUT", priority="high", tags=["rotating_light"], topic=topic)
-                            elif bucket == "sliding":
-                                send_push(f"{_legtext(s)} is turning — down to {s['live_prob']*100:.0f}% "
-                                          f"(from {s['entry_prob']*100:.0f}%). Consider cashing out NOW while it still has value.",
-                                          title="🟠 Heads up — cash out?", priority="high", tags=["warning"], topic=topic)
                                 # Dead parlay? Hand him the next best play so there's no dead end.
                                 if "DEAD" in s["action"]:
                                     await _bounce_back(username, topic)
+                            elif bucket == "sliding":
+                                send_push(f"{_legtext(s)} is turning — down to {s['live_prob']*100:.0f}% "
+                                          f"(from {s['entry_prob']*100:.0f}%). Consider cashing out NOW while it still has value.{real_txt}",
+                                          title="🟠 Heads up — cash out?", priority="high", tags=["warning"], topic=topic)
                             elif bucket == "great":
                                 send_push(f"{_legtext(s)} looking great — live {s['live_prob']*100:.0f}%! "
                                           f"On track to hit.", title="🟢 Parlay cruising",
