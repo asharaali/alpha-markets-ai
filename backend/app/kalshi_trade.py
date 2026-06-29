@@ -148,3 +148,60 @@ async def place_yes(home: str, away: str, selection: str, stake_dollars: float):
     if not mk:
         return False, "no matching open Kalshi market"
     return await place_order(mk["ticker"], "yes", stake_dollars)
+
+
+async def place_leg_detailed(home: str, away: str, selection: str, stake_dollars: float):
+    """
+    Place one combo leg (buy YES) and return STRUCTURED info we can store for live tracking
+    and cash-out: {ok, ticker, entry_price (0-1 cost per contract), count, info}.
+    """
+    mk = await _find_market(home, away, selection)
+    if not mk:
+        return {"ok": False, "info": "no matching open Kalshi market", "ticker": None}
+    ticker = mk["ticker"]
+    try:
+        async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "AlphaMarketsAI/1.0"}) as c:
+            yes_bid, yes_ask, _ = await orderbook_prices(c, ticker)
+    except Exception as exc:
+        return {"ok": False, "info": f"book error: {exc}", "ticker": ticker}
+    cost = yes_ask
+    if not cost:
+        return {"ok": False, "info": "no live ask (illiquid)", "ticker": ticker}
+    ok, info = await place_order(ticker, "yes", stake_dollars)
+    return {"ok": ok, "info": info, "ticker": ticker,
+            "entry_price": round(cost, 4), "count": int(stake_dollars / cost)}
+
+
+async def close_position(home: str, away: str, selection: str, stake_dollars: float):
+    """
+    Cash out a YES position: SELL YES by buying NO into the current bid (this is exactly how
+    Kalshi closes a long YES). Returns (ok, info). stake_dollars sizes how much to unwind.
+    """
+    mk = await _find_market(home, away, selection)
+    if not mk:
+        return False, "no matching open Kalshi market"
+    return await place_order(mk["ticker"], "no", stake_dollars)
+
+
+async def get_positions():
+    """
+    Read-only: the tickers you currently hold contracts in (for manual cash-out sync —
+    if a tracked leg's position is gone, you sold it yourself). Returns (ok, {ticker: count}).
+    """
+    if not (settings.KALSHI_KEY_ID and settings.KALSHI_PRIVATE_KEY):
+        return False, "no Kalshi key configured"
+    try:
+        path = "/trade-api/v2/portfolio/positions"
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"{BASE}/portfolio/positions", headers=_signed_headers("GET", path),
+                            params={"count_filter": "position", "limit": 1000})
+        if r.status_code != 200:
+            return False, f"Kalshi rejected ({r.status_code}): {r.text[:140]}"
+        held = {}
+        for p in r.json().get("market_positions", []):
+            pos = p.get("position", 0)
+            if pos:                              # non-zero => still holding
+                held[p.get("ticker")] = pos
+        return True, held
+    except Exception as exc:
+        return False, f"error: {exc}"

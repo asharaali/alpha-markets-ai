@@ -14,15 +14,20 @@ import re
 from app.soccer_model import (match_probabilities, live_match_probabilities,
                               live_leg_probability, extended_markets)
 
-# Markets Kalshi allows in a parlay.
-_KALSHI_RE = re.compile(r"match result|winning margin|spread|total goals|both teams|goalscorer", re.I)
+# Markets Kalshi lists for a World Cup parlay.
+_KALSHI_RE = re.compile(r"match result|winning margin|spread|total goals|both teams|goalscorer|corners", re.I)
+# In the knockout rounds the parlay is built ONLY from these clean markets: which team
+# wins, a player to score, and total corners (8+ minimum). Tight, low-event games make the
+# fancier goal-line / BTTS / margin legs unreliable, so we leave them out of knockout combos.
+_KNOCKOUT_RE = re.compile(r"match result|goalscorer|corners", re.I)
 
 
 def _candidate_legs(home: str, away: str, stage: Optional[Dict] = None) -> List[Dict]:
     legs = []
     knockout = bool(stage and stage.get("is_knockout"))
+    gate = _KNOCKOUT_RE if knockout else _KALSHI_RE
     for cat, sels in extended_markets(home, away, stage)["markets"].items():
-        if not _KALSHI_RE.search(cat):
+        if not gate.search(cat):
             continue
         mtype = "goalscorer" if "goalscorer" in cat.lower() else cat
         for s in sels:

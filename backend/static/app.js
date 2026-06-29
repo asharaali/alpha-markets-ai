@@ -498,9 +498,36 @@ document.getElementById("evalCombo").addEventListener("click", async () => {
       <div>Suggested stake<b>${money(d.stake.recommended_dollars)}</b></div>
     </div>
     <p class="sub">${d.note}</p>
-    <button id="logBet" class="btn primary" style="margin-top:12px">＋ Log this bet to My Record</button>`;
+    <button id="logBet" class="btn primary" style="margin-top:12px">＋ Log this bet to My Record</button>
+    <div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button id="placeKalshi" class="btn primary">🤖 Place combo on Kalshi</button>
+      <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">
+        <input type="checkbox" id="placeLive"> place LIVE (real money)</label>
+    </div>
+    <p class="sub" id="placeMsg" style="margin-top:6px"></p>`;
   document.getElementById("logBet").addEventListener("click", logCurrentCombo);
+  document.getElementById("placeKalshi").addEventListener("click", placeComboOnKalshi);
 });
+
+async function placeComboOnKalshi() {
+  if (!lastCombo) return;
+  const amount = parseFloat(document.getElementById("comboStake").value) || 0;
+  if (amount <= 0) return alert("Enter your amount in the stake box first.");
+  const live = document.getElementById("placeLive").checked;
+  if (live && !confirm(`Place this combo LIVE on Kalshi for $${amount} of REAL money?`)) return;
+  const btn = document.getElementById("placeKalshi");
+  btn.disabled = true; btn.textContent = "Placing…";
+  try {
+    const r = await (await fetch(`${API}/api/combo/place`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ combo: lastCombo, amount, mode: live ? "live" : "paper", book: "Kalshi" }),
+    })).json();
+    if (r.error) { document.getElementById("placeMsg").textContent = "⚠ " + r.error; btn.disabled = false; btn.textContent = "🤖 Place combo on Kalshi"; return; }
+    btn.textContent = r.mode === "live" ? "✓ Placed LIVE — tracking it" : "✓ Placed (paper) — tracking it";
+    document.getElementById("placeMsg").textContent = r.note + " I'll alert you to cash out if it turns.";
+    loadRecord();
+  } catch (e) { document.getElementById("placeMsg").textContent = "⚠ Couldn't place: " + e; btn.disabled = false; btn.textContent = "🤖 Place combo on Kalshi"; }
+}
 
 async function logCurrentCombo() {
   if (!lastCombo) return;
@@ -598,6 +625,7 @@ async function loadRecord() {
     ? d.pending_bets.map((b) => pendingRow(b, liveMap[b.id])).join("")
     : `<div class="empty">No pending bets. Log a combo to start tracking.</div>`;
   d.pending_bets.forEach((b) => {
+    document.getElementById(`cash-${b.id}`).onclick = () => cashoutCombo(b.id);
     document.getElementById(`hit-${b.id}`).onclick = () => settle(b.id, true);
     document.getElementById(`miss-${b.id}`).onclick = () => settle(b.id, false);
     document.getElementById(`del-${b.id}`).onclick = () => removeBet(b.id);
@@ -635,10 +663,22 @@ function pendingRow(b, ls) {
       <div class="meta">${b.leg_count} legs · model ${(b.model_prob*100).toFixed(0)}% · ${b.payout_multiple}× · $${b.stake} on ${b.book||"—"}</div>
       ${cashoutTag(ls)}</div>
     <div class="bet-actions">
+      <button id="cash-${b.id}" class="btn ${ls && ls.cash_out ? "miss" : "primary"}" title="Cash out / close this position now">💵 Cash out</button>
       <button id="hit-${b.id}" class="btn hit">Hit ✓</button>
       <button id="miss-${b.id}" class="btn miss">Miss ✗</button>
       <button id="del-${b.id}" class="btn del" title="Remove / changed my mind">✕</button>
     </div></div>`;
+}
+
+async function cashoutCombo(id) {
+  if (!confirm("Cash out this combo now?\n\nThis closes the position (sells your legs on Kalshi if it was placed live) and stops tracking it. The realized value goes into your record.")) return;
+  const r = await (await fetch(`${API}/api/combo/cashout`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bet_id: id }),
+  })).json();
+  if (r.ok) alert(`Cashed out for ${r.cashout_value != null ? "$" + r.cashout_value : "—"} (${r.mode}).`);
+  else alert(r.error || "Couldn't cash out.");
+  loadRecord();
 }
 
 async function removeBet(id) {
@@ -648,6 +688,14 @@ async function removeBet(id) {
 }
 
 function settledRow(b) {
+  if (b.status === "cashed_out") {
+    const profit = (b.cashout_value || 0) - (b.stake || 0);
+    return `<div class="bet">
+      <div class="bet-info"><b>${legLabels(b)}</b>
+        <div class="meta">cashed out · got $${b.cashout_value} on $${b.stake} ·
+          <span style="color:${profit>=0?'var(--green)':'var(--red)'}">${profit>=0?"+":""}${money(profit)}</span></div></div>
+      <span class="result-badge" style="background:var(--amber)">CASHED</span></div>`;
+  }
   const win = b.status === "hit";
   return `<div class="bet">
     <div class="bet-info"><b>${legLabels(b)}</b>

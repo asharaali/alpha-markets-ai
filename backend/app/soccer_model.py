@@ -32,6 +32,14 @@ MAX_GOALS = 8
 # knockout games. Overwritten by the trained value if training has been run.
 RHO = -0.11
 
+# Corners model. Corners come from attacking pressure, which scales with how many goals
+# the teams are expected to create — so we drive corners off the same expected-goals the
+# rest of the model produces. Honest limits (same as the goalscorer model): it's rate-based
+# and does NOT know tactics, game state, or lineups. An even international match averages
+# ~10 total corners; the favourite's pressure pushes it up, a cagey knockout nudges it down.
+BASE_CORNERS = 6.5
+CORNERS_PER_XG = 1.5
+
 
 # Seed ratings for the 2026 World Cup field (approximate international Elo).
 # Unknown teams default to 1700. These self-correct as results come in.
@@ -117,6 +125,21 @@ def _expected_goals(team_a: str, team_b: str, stage: Optional[Dict] = None) -> t
 
 def _poisson_pmf(k: int, lam: float) -> float:
     return math.exp(-lam) * lam ** k / math.factorial(k)
+
+
+def expected_corners(lam_a: float, lam_b: float, stage: Optional[Dict] = None) -> float:
+    """Expected TOTAL match corners from both teams' expected goals (attacking pressure)."""
+    st = _stage(stage)
+    mean = BASE_CORNERS + CORNERS_PER_XG * (lam_a + lam_b)
+    # Cautious knockout football trims corners a touch (square-root so it's a gentle nudge).
+    mean *= st.get("goals_mult", 1.0) ** 0.5
+    return max(3.0, mean)
+
+
+def corners_over(mean: float, line: int) -> float:
+    """P(total corners >= line+1), i.e. Kalshi-style 'Over line.5 corners' (Poisson)."""
+    cdf = sum(_poisson_pmf(k, mean) for k in range(line + 1))
+    return max(0.0, 1.0 - cdf)
 
 
 def _dc_tau(i: int, j: int, lam_a: float, lam_b: float, rho: float) -> float:
@@ -314,6 +337,8 @@ def extended_markets(team_a: str, team_b: str, stage: Optional[Dict] = None) -> 
     # BTTS straight off the (DC-corrected, normalised) scoreline matrix so it stays consistent.
     btts_yes = sum(p for i, j, p in score_probs if i >= 1 and j >= 1)
 
+    corners_mean = expected_corners(lam_a, lam_b, st)
+
     # Winning margin / spread (matches Kalshi's "Team wins by more than X.5 goals").
     home_by_2plus = sum(p for i, j, p in score_probs if i - j >= 2)
     home_by_3plus = sum(p for i, j, p in score_probs if i - j >= 3)
@@ -354,6 +379,13 @@ def extended_markets(team_a: str, team_b: str, stage: Optional[Dict] = None) -> 
         ],
         "Both Teams To Score": [
             _sel("BTTS: Yes", btts_yes), _sel("BTTS: No", 1 - btts_yes),
+        ],
+        "Total Corners": [
+            # Kalshi-style "X+ corners" contracts. 8+ (Over 7.5) is the minimum line —
+            # the safe, knockout-friendly corners leg you asked for.
+            s for line in (7, 8, 9, 10, 11)
+            for s in (_sel(f"{line + 1}+ corners", corners_over(corners_mean, line)),
+                      _sel(f"Under {line + 1} corners", 1 - corners_over(corners_mean, line)))
         ],
         "Correct Score": [
             _sel(f"{i}-{j}", p) for i, j, p in score_probs[:8]

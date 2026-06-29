@@ -136,6 +136,26 @@ def settle_bet(user: str, bet_id: str, hit: bool) -> Optional[Dict]:
     return None
 
 
+def cashout_bet(user: str, bet_id: str, cashout_value: float, source: str = "") -> Optional[Dict]:
+    """
+    Mark a pending bet as cashed out (sold before the games finished) and record the
+    realized return. Status 'cashed_out' is kept SEPARATE from hit/miss: it counts toward
+    your money (ROI) but not toward the model's calibration (reality factor), since the
+    outcome was taken off the table early rather than allowed to resolve.
+    `cashout_value` is the dollars you got back for the position.
+    """
+    bets = _load(user)
+    for b in bets:
+        if b["id"] == bet_id and b["status"] == "pending":
+            b["status"] = "cashed_out"
+            b["settled_at"] = time.time()
+            b["cashout_value"] = round(float(cashout_value), 2)
+            b["cashout_source"] = source
+            _save(user, bets)
+            return b
+    return None
+
+
 def delete_bet(user: str, bet_id: str) -> bool:
     bets = _load(user)
     new = [b for b in bets if b["id"] != bet_id]
@@ -170,12 +190,15 @@ def _avg_model_prob(settled: List[Dict]):
 def stats(user: str) -> Dict:
     bets = _load(user)
     settled = [b for b in bets if b["status"] in ("hit", "miss")]
+    cashed = [b for b in bets if b["status"] == "cashed_out"]
     pending = [b for b in bets if b["status"] == "pending"]
     hits = [b for b in settled if b["status"] == "hit"]
 
-    staked = sum(b.get("stake", 0) or 0 for b in settled)
-    returned = sum((b.get("stake", 0) or 0) * (b.get("odds") or 0)
-                   for b in hits)
+    # Money: settled win/loss + cashed-out realized value all count toward ROI.
+    staked = (sum(b.get("stake", 0) or 0 for b in settled)
+              + sum(b.get("stake", 0) or 0 for b in cashed))
+    returned = (sum((b.get("stake", 0) or 0) * (b.get("odds") or 0) for b in hits)
+                + sum(b.get("cashout_value", 0) or 0 for b in cashed))
     roi = ((returned - staked) / staked) if staked > 0 else None
 
     rf = reality_factor(user)
@@ -183,6 +206,7 @@ def stats(user: str) -> Dict:
         "total": len(bets),
         "pending": len(pending),
         "settled": len(settled),
+        "cashed_out": len(cashed),
         "hits": len(hits),
         "misses": len(settled) - len(hits),
         "hit_rate": round(len(hits) / len(settled), 3) if settled else None,
@@ -198,5 +222,6 @@ def stats(user: str) -> Dict:
             else f"Need {MIN_SAMPLES_FOR_LEARNING - len(settled)} more settled bets before the model starts auto-correcting."
         ),
         "pending_bets": sorted(pending, key=lambda b: b["created_at"], reverse=True),
-        "recent_settled": sorted(settled, key=lambda b: b.get("settled_at") or 0, reverse=True)[:10],
+        "recent_settled": sorted(settled + cashed,
+                                 key=lambda b: b.get("settled_at") or 0, reverse=True)[:10],
     }

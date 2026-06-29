@@ -140,6 +140,17 @@ class SettleRequest(BaseModel):
     hit: bool
 
 
+class PlaceComboRequest(BaseModel):
+    combo: dict                 # the evaluated combo (with structured legs)
+    amount: float               # total dollars to put on the combo
+    mode: str = "paper"         # paper | live  (live is gated to your Kalshi account)
+    book: str = "Kalshi"
+
+
+class CashoutComboRequest(BaseModel):
+    bet_id: str
+
+
 class AutoParlayRequest(BaseModel):
     games: List[dict]            # [{"home": "...", "away": "..."}]
     style: str = "moderate safe" # safe | moderate safe | slight risk | medium risk | risky | optimize
@@ -304,6 +315,107 @@ async def combo_log(req: LogBetRequest, request: Request):
                       title="⚠️ Not tracked live", priority="high", tags=["warning"], topic=topic)
     entry["trackable"] = trackable
     return entry
+
+
+@app.post("/api/combo/place")
+async def combo_place(req: PlaceComboRequest, request: Request):
+    """
+    Place a chosen combo + amount ON KALSHI, then track it as ONE combo for live cash-out.
+
+    Kalshi has no native single-ticket parlay over the API yet, so the combo goes down as
+    its legs (the amount split across them) but is recorded and managed as a single combo —
+    one cash-out closes the whole thing. PAPER mode (default) simulates fills so you can use
+    it with zero risk; LIVE is gated to your own Kalshi account.
+    """
+    user = request.state.user
+    combo = req.combo or {}
+    legs = combo.get("legs", [])
+    trackable = bool(legs) and all(isinstance(l, dict) and l.get("home") and l.get("away")
+                                   and l.get("selection") for l in legs)
+    if not trackable:
+        return {"ok": False, "error": "This combo has legs I can't place/track (need game + selection)."}
+
+    go_live = req.mode == "live" and autobet.live_available(user)
+    per_leg = round(req.amount / max(1, len(legs)), 2)
+    placed_legs, all_ok = [], True
+    for lg in legs:
+        leg = dict(lg)
+        if go_live:
+            from app.kalshi_trade import place_leg_detailed
+            r = await place_leg_detailed(lg["home"], lg["away"], lg["selection"], per_leg)
+            leg["kalshi_ticker"] = r.get("ticker")
+            leg["kalshi_entry"] = r.get("entry_price")
+            leg["place_status"] = "LIVE ✓" if r.get("ok") else f"live failed: {r.get('info')}"
+            all_ok = all_ok and bool(r.get("ok"))
+        else:
+            # Paper fill at the leg's fair price implied by its odds.
+            leg["kalshi_ticker"] = None
+            leg["kalshi_entry"] = round(1.0 / float(lg["market_odds_decimal"]), 4)
+            leg["place_status"] = "paper ✓"
+        placed_legs.append(leg)
+
+    combo = dict(combo); combo["legs"] = placed_legs
+    entry = bet_log.log_bet(user, combo, stake=req.amount, book=req.book)
+    bet_log.update_bet(user, entry["id"], {"mode": "live" if go_live else "paper",
+                                           "placed_on_kalshi": go_live, "legs": placed_legs})
+    topic = (auth.get_user(user) or {}).get("ntfy_topic")
+    if topic:
+        tag = "LIVE 💸" if go_live else "PAPER"
+        send_push(f"[{tag}] Combo placed: {_legtext({'legs': placed_legs})} · ${req.amount}. "
+                  f"I'm watching it live — I'll ping you to cash out if it turns.",
+                  title="🤖 Combo on Kalshi", tags=["robot"], topic=topic)
+    return {"ok": all_ok, "bet_id": entry["id"], "mode": "live" if go_live else "paper",
+            "per_leg": per_leg, "legs": placed_legs,
+            "note": ("Placed live on Kalshi." if go_live else
+                     "Paper mode — simulated fills, no real money. Enable live trading to place for real.")}
+
+
+async def _combo_cashout_value(user: str, bet: dict) -> float:
+    """Model fair value of an open combo position right now = potential payout × current
+    combined probability. Used as the realized cash-out amount."""
+    stake = bet.get("stake", 0) or 0
+    payout_mult = bet.get("payout_multiple") or bet.get("odds") or 1.0
+    cur_prob = bet.get("model_prob") or 0.0
+    try:
+        scores = await get_live_scores()
+        for s in monitor_live_bets(scores or [], user):
+            if s["id"] == bet["id"]:
+                cur_prob = s["live_prob"]
+                break
+    except Exception:
+        pass
+    return round(stake * payout_mult * cur_prob, 2)
+
+
+@app.post("/api/combo/cashout")
+async def combo_cashout(req: CashoutComboRequest, request: Request):
+    """
+    One-tap cash out: sell the combo's Kalshi legs now (live mode) and record the realized
+    value so the AI stops tracking it. In paper mode it books the model's fair cash-out value.
+    """
+    user = request.state.user
+    bet = next((b for b in bet_log.pending_bets(user) if b["id"] == req.bet_id), None)
+    if not bet:
+        return {"ok": False, "error": "No pending bet with that id."}
+
+    value = await _combo_cashout_value(user, bet)
+    sold, live = [], bool(bet.get("placed_on_kalshi")) and autobet.live_available(user)
+    if live:
+        from app.kalshi_trade import close_position
+        for lg in bet.get("legs", []):
+            if lg.get("kalshi_ticker"):
+                ok, info = await close_position(lg["home"], lg["away"], lg["selection"],
+                                                bet.get("stake", 0) / max(1, len(bet["legs"])))
+                sold.append({"leg": lg.get("label"), "ok": ok, "info": info})
+
+    b = bet_log.cashout_bet(user, req.bet_id, value,
+                            source="live Kalshi sell" if live else "paper cash-out")
+    topic = (auth.get_user(user) or {}).get("ntfy_topic")
+    if topic:
+        send_push(f"Cashed out {_legtext(bet)} for ${value}. Position closed — done tracking it.",
+                  title="💵 Cashed out", tags=["money_with_wings"], topic=topic)
+    return {"ok": True, "bet_id": req.bet_id, "cashout_value": value,
+            "mode": "live" if live else "paper", "legs_sold": sold, "bet": b}
 
 
 @app.post("/api/bets/manual")
@@ -498,6 +610,33 @@ async def _real_kalshi_pnl(bet: dict):
     return {"price": price, "pnl_pct": pnl, "entry": entry}
 
 
+async def _sync_manual_cashouts(username: str, topic: str):
+    """
+    Manual cash-out sync: if you sold a tracked combo's legs yourself on Kalshi, the
+    contracts won't be in your positions anymore. Detect that, mark the combo cashed-out,
+    and stop tracking it — so the app always matches what you actually hold.
+    """
+    if not autobet.live_available(username):
+        return
+    live_bets = [b for b in bet_log.pending_bets(username)
+                 if b.get("placed_on_kalshi") and any(l.get("kalshi_ticker") for l in b.get("legs", []))]
+    if not live_bets:
+        return
+    from app.kalshi_trade import get_positions
+    ok, held = await get_positions()
+    if not ok or not isinstance(held, dict):
+        return
+    for b in live_bets:
+        tickers = [l["kalshi_ticker"] for l in b.get("legs", []) if l.get("kalshi_ticker")]
+        if tickers and not any(t in held for t in tickers):   # nothing left => you sold it
+            value = await _combo_cashout_value(username, b)
+            bet_log.cashout_bet(username, b["id"], value, source="manual sell (auto-detected)")
+            _notify_state.pop(b["id"], None)
+            send_push(f"Synced: you cashed out {_legtext(b)} on Kalshi (~${value}). "
+                      f"I've closed it here and stopped tracking it.",
+                      title="🔄 Cash-out synced", tags=["arrows_counterclockwise"], topic=topic)
+
+
 async def _bounce_back(username: str, topic: str):
     """After a parlay dies, immediately push the strongest fresh play to bet next."""
     try:
@@ -528,6 +667,8 @@ async def _notify_loop():
                 any_live = False
                 for username in users_with_bets:
                     topic = (auth.get_user(username) or {}).get("ntfy_topic")
+                    # Reconcile any combos you cashed out yourself on Kalshi before tracking.
+                    await _sync_manual_cashouts(username, topic)
                     bets_by_id = {b["id"]: b for b in bet_log.pending_bets(username)}
                     for s in monitor_live_bets(scores or [], username):
                         if s["any_live"]:
