@@ -18,13 +18,19 @@ from app.soccer_model import (match_probabilities, live_match_probabilities,
 _KALSHI_RE = re.compile(r"match result|winning margin|spread|total goals|both teams|goalscorer", re.I)
 
 
-def _candidate_legs(home: str, away: str) -> List[Dict]:
+def _candidate_legs(home: str, away: str, stage: Optional[Dict] = None) -> List[Dict]:
     legs = []
-    for cat, sels in extended_markets(home, away)["markets"].items():
+    knockout = bool(stage and stage.get("is_knockout"))
+    for cat, sels in extended_markets(home, away, stage)["markets"].items():
         if not _KALSHI_RE.search(cat):
             continue
         mtype = "goalscorer" if "goalscorer" in cat.lower() else cat
         for s in sels:
+            # In a knockout a 90-minute Draw just sends the tie to extra time / penalties —
+            # someone still advances — so it's a confusing, trap-prone standalone parlay leg.
+            # Skip it in knockout rounds and lean on cleaner markets instead.
+            if knockout and "match result" in cat.lower() and s["label"] == "Draw":
+                continue
             legs.append({
                 "home": home, "away": away, "market": cat, "mtype": mtype,
                 "selection": s["label"], "label": f"{home} v {away}: {s['label']}",
@@ -44,21 +50,41 @@ RISK_TIERS = {
 }
 
 
+def _resolve_tier(style: str, stage: Dict) -> tuple[float, int]:
+    """
+    Tier target + leg count, adjusted for the tournament stage. In knockout rounds one
+    goal (or a shootout) decides everything, so we lean on higher-probability legs and
+    stack fewer of them — every extra leg is a bigger coin-flip than it was in the groups.
+    """
+    target, n = RISK_TIERS.get(style, RISK_TIERS["moderate safe"])
+    if stage.get("is_knockout"):
+        depth = stage.get("depth", 1)
+        target = min(0.93, target + 0.03 + 0.01 * depth)  # demand safer legs
+        if n >= 4:
+            n -= 1                                          # don't stack longshots
+    return target, n
+
+
 def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs: Optional[int] = None,
                       bankroll: Optional[float] = None) -> Dict:
     """
     Auto-build a parlay across ALL Kalshi market types (who wins, margin, totals, BTTS,
     player props) at the chosen risk tier. One leg per (game, market type) so it's varied.
     Each leg is picked near the tier's target probability => smooth grading across tiers.
+
+    Stage-aware: in knockout rounds the legs are pulled from the tighter knockout model,
+    Draw legs are dropped, and the tier leans safer (see _resolve_tier).
     """
+    from app.tournament import current_stage
+    stage = current_stage()
     style = style.lower().strip()
-    target, n = RISK_TIERS.get(style, RISK_TIERS["moderate safe"])
+    target, n = _resolve_tier(style, stage)
     if max_legs:
         n = max_legs
 
     cands = []
     for g in games:
-        cands += _candidate_legs(g["home"], g["away"])
+        cands += _candidate_legs(g["home"], g["away"], stage)
     if not cands:
         return {"error": "no games/markets found for that day"}
 
@@ -78,6 +104,8 @@ def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs:
         return {"error": f"no legs found for '{style}' that day"}
     res = evaluate_combo(picked, bankroll)
     res["style"] = style
+    res["stage"] = stage["stage"]
+    res["stage_label"] = stage["label"]
     return res
 
 
@@ -144,8 +172,10 @@ def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
         res["note"] = "You've already got every +EV parlay on this board. This is the strongest one again."
         return res
 
+    from app.tournament import current_stage
     res = dict(fresh[0][2])
     res["optimize"] = True
+    res["stage_label"] = current_stage()["label"]
     res["alternatives"] = [r[2] for r in fresh[1:4]]  # next-best fresh parlays for variety
     return res
 
@@ -309,11 +339,20 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Opt
         combined_prob *= float(leg["model_prob"])
         combined_odds *= float(leg["market_odds_decimal"])
 
+    # Stage adjustment: knockout games are coin-flippier (a single goal or a shootout
+    # decides), so a clean independent-Poisson combined probability is too optimistic.
+    # Shrink it by the stage's combo factor (1.0 in the group stage, lower each round).
+    from app.tournament import current_stage
+    stage = current_stage()
+    combo_factor = stage.get("combo_factor", 1.0)
+
     # Learning loop: if your logged results say the model is overconfident on combos,
     # shrink the probability we bet on by the measured 'reality factor'.
     from app.bet_log import reality_factor
     rf = reality_factor(user) if user else None
-    adj_prob = combined_prob * rf if rf else combined_prob
+    adj_prob = combined_prob * combo_factor
+    if rf:
+        adj_prob *= rf
     adj_prob = min(max(adj_prob, 1e-6), 0.999)
 
     ev = P.expected_value(adj_prob, combined_odds)
@@ -324,6 +363,8 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Opt
         "combined_model_prob": round(combined_prob, 4),
         "experience_adjusted_prob": round(adj_prob, 4),
         "reality_factor": rf,
+        "stage": stage["stage"],
+        "stage_combo_factor": combo_factor,
         "combined_odds_decimal": round(combined_odds, 2),
         "combined_odds_american": P.decimal_to_american(combined_odds),
         "payout_multiple": round(combined_odds, 2),
@@ -334,6 +375,8 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Opt
         "note": (
             "Every leg you add multiplies the payout but also multiplies the ways to lose. "
             "Combos are almost always -EV unless each leg is independently +value."
+            + (f" Knockout-stage shrink applied ({stage['stage']}, factor {combo_factor})."
+               if combo_factor < 1.0 else "")
             + (f" Estimate shrunk by your logged results (reality factor {rf})." if rf else "")
         ),
     }

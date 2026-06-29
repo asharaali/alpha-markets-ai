@@ -25,6 +25,12 @@ BASE_TOTAL_GOALS = 2.6
 ELO_PER_GOAL = 220.0
 # Max goals per team to enumerate in the Poisson matrix.
 MAX_GOALS = 8
+# Dixon-Coles low-score correction. Plain Poisson treats the two teams' goals as
+# independent, which systematically UNDER-counts draws and low scores (0-0, 1-1) and
+# OVER-counts 1-0 / 0-1. rho<0 nudges those four cells back toward reality — the single
+# biggest calibration fix for a Poisson soccer model, and it matters most in tight
+# knockout games. Overwritten by the trained value if training has been run.
+RHO = -0.11
 
 
 # Seed ratings for the 2026 World Cup field (approximate international Elo).
@@ -63,6 +69,7 @@ if _TRAINED_PATH.exists():
         TEAM_ELO = {k: float(v) for k, v in _t["ratings"].items()}
         ELO_PER_GOAL = float(_t["params"]["elo_per_goal"])
         BASE_TOTAL_GOALS = float(_t["params"]["base_goals"])
+        RHO = float(_t["params"].get("rho", RHO))
         # Use the learned home advantage as the host-nation bump (others ~neutral at the WC).
         HOST_BONUS = float(_t["params"]["home_adv"])
         # Truly-unknown teams sit below the field on the trained 1500-centred scale.
@@ -86,12 +93,25 @@ def get_rating(team: str) -> float:
     return TEAM_ELO.get(team, DEFAULT_ELO)
 
 
-def _expected_goals(team_a: str, team_b: str) -> tuple[float, float]:
+def _stage(stage: Optional[Dict] = None) -> Dict:
+    """The active tournament stage + tuning. Defaults to today's real WC stage."""
+    if stage is not None:
+        return stage
+    from app.tournament import current_stage
+    return current_stage()
+
+
+def _expected_goals(team_a: str, team_b: str, stage: Optional[Dict] = None) -> tuple[float, float]:
+    st = _stage(stage)
     ra = get_rating(team_a) + (HOST_BONUS if team_a in HOST_NATIONS else 0)
     rb = get_rating(team_b) + (HOST_BONUS if team_b in HOST_NATIONS else 0)
     supremacy = (ra - rb) / ELO_PER_GOAL  # expected goal difference for A
-    lam_a = max(0.18, (BASE_TOTAL_GOALS + supremacy) / 2.0)
-    lam_b = max(0.18, (BASE_TOTAL_GOALS - supremacy) / 2.0)
+    # Knockout football is tighter and lower-scoring, and favourites are less dominant —
+    # more so the deeper into the bracket. These multipliers are 1.0 in the group stage.
+    base = BASE_TOTAL_GOALS * st.get("goals_mult", 1.0)
+    supremacy *= st.get("supremacy_mult", 1.0)
+    lam_a = max(0.18, (base + supremacy) / 2.0)
+    lam_b = max(0.18, (base - supremacy) / 2.0)
     return lam_a, lam_b
 
 
@@ -99,19 +119,35 @@ def _poisson_pmf(k: int, lam: float) -> float:
     return math.exp(-lam) * lam ** k / math.factorial(k)
 
 
-def match_probabilities(team_a: str, team_b: str) -> Dict:
+def _dc_tau(i: int, j: int, lam_a: float, lam_b: float, rho: float) -> float:
+    """Dixon-Coles correction multiplier for the four lowest scorelines (else 1.0)."""
+    if i == 0 and j == 0:
+        return 1.0 - lam_a * lam_b * rho
+    if i == 0 and j == 1:
+        return 1.0 + lam_a * rho
+    if i == 1 and j == 0:
+        return 1.0 + lam_b * rho
+    if i == 1 and j == 1:
+        return 1.0 - rho
+    return 1.0
+
+
+def match_probabilities(team_a: str, team_b: str, stage: Optional[Dict] = None) -> Dict:
     """Full model output for team_a (home) vs team_b (away)."""
-    lam_a, lam_b = _expected_goals(team_a, team_b)
+    st = _stage(stage)
+    lam_a, lam_b = _expected_goals(team_a, team_b, st)
     pa = [_poisson_pmf(i, lam_a) for i in range(MAX_GOALS + 1)]
     pb = [_poisson_pmf(j, lam_b) for j in range(MAX_GOALS + 1)]
 
     p_home = p_draw = p_away = 0.0
     p_over25 = p_btts = 0.0
+    total_mass = 0.0
     top_scores: List[tuple[str, float]] = []
 
     for i in range(MAX_GOALS + 1):
         for j in range(MAX_GOALS + 1):
-            p = pa[i] * pb[j]
+            p = pa[i] * pb[j] * _dc_tau(i, j, lam_a, lam_b, RHO)
+            total_mass += p
             if i > j:
                 p_home += p
             elif i == j:
@@ -124,11 +160,19 @@ def match_probabilities(team_a: str, team_b: str) -> Dict:
                 p_btts += p
             top_scores.append((f"{i}-{j}", p))
 
+    # The DC correction nudges four cells, so the matrix no longer sums to exactly 1 —
+    # renormalise so every probability we return is honest.
+    if total_mass > 0:
+        p_home /= total_mass; p_draw /= total_mass; p_away /= total_mass
+        p_over25 /= total_mass; p_btts /= total_mass
+        top_scores = [(s, p / total_mass) for s, p in top_scores]
+
     top_scores.sort(key=lambda x: x[1], reverse=True)
 
     return {
         "team_a": team_a,
         "team_b": team_b,
+        "stage": st.get("stage"),
         "expected_goals": {"a": round(lam_a, 2), "b": round(lam_b, 2)},
         "probs": {
             "home": round(p_home, 4),
@@ -148,7 +192,8 @@ def match_probabilities(team_a: str, team_b: str) -> Dict:
 
 
 def live_match_probabilities(team_a: str, team_b: str,
-                             score_a: int, score_b: int, minute: int) -> Dict:
+                             score_a: int, score_b: int, minute: int,
+                             stage: Optional[Dict] = None) -> Dict:
     """
     In-play win/draw/loss probabilities. This is what makes cash-out actually live.
 
@@ -158,7 +203,8 @@ def live_match_probabilities(team_a: str, team_b: str,
     so the probabilities lock onto the current scoreline — exactly how a real live market
     behaves.
     """
-    lam_a, lam_b = _expected_goals(team_a, team_b)
+    st = _stage(stage)
+    lam_a, lam_b = _expected_goals(team_a, team_b, st)
     minute = max(0, min(minute, 95))
     remaining_frac = max(0.0, (95 - minute) / 95.0)
     rem_a = lam_a * remaining_frac
@@ -169,9 +215,13 @@ def live_match_probabilities(team_a: str, team_b: str,
 
     p_home = p_draw = p_away = 0.0
     p_over25 = p_btts = 0.0
+    total_mass = 0.0
     for i in range(MAX_GOALS + 1):
         for j in range(MAX_GOALS + 1):
-            p = pa[i] * pb[j]
+            # DC applies to the goals STILL TO COME (rates rem_a/rem_b) — that's the live
+            # joint distribution we're correcting.
+            p = pa[i] * pb[j] * _dc_tau(i, j, rem_a, rem_b, RHO)
+            total_mass += p
             fa, fb = score_a + i, score_b + j
             if fa > fb:
                 p_home += p
@@ -184,10 +234,15 @@ def live_match_probabilities(team_a: str, team_b: str,
             if fa >= 1 and fb >= 1:
                 p_btts += p
 
+    if total_mass > 0:
+        p_home /= total_mass; p_draw /= total_mass; p_away /= total_mass
+        p_over25 /= total_mass; p_btts /= total_mass
+
     return {
         "team_a": team_a,
         "team_b": team_b,
         "live": True,
+        "stage": st.get("stage"),
         "minute": minute,
         "score": {"a": score_a, "b": score_b},
         "expected_final_goals": {"a": round(score_a + rem_a, 2), "b": round(score_b + rem_b, 2)},
@@ -210,7 +265,7 @@ def _sel(label: str, prob: float) -> Dict:
     return {"label": label, "prob": round(prob, 4), "fair_odds": round(1 / prob, 2)}
 
 
-def extended_markets(team_a: str, team_b: str) -> Dict:
+def extended_markets(team_a: str, team_b: str, stage: Optional[Dict] = None) -> Dict:
     """
     Every bet type the model can price for this match, from the Poisson scoreline matrix:
     match result, double chance, total-goals over/under (multiple lines), each team's
@@ -222,16 +277,19 @@ def extended_markets(team_a: str, team_b: str) -> Dict:
     """
     from app.scorer_model import anytime_scorers
 
-    lam_a, lam_b = _expected_goals(team_a, team_b)
+    st = _stage(stage)
+    lam_a, lam_b = _expected_goals(team_a, team_b, st)
     pa = [_poisson_pmf(i, lam_a) for i in range(MAX_GOALS + 1)]
     pb = [_poisson_pmf(j, lam_b) for j in range(MAX_GOALS + 1)]
 
     home = draw = away = 0.0
     total_dist = [0.0] * (2 * MAX_GOALS + 1)
     score_probs = []
+    total_mass = 0.0
     for i in range(MAX_GOALS + 1):
         for j in range(MAX_GOALS + 1):
-            p = pa[i] * pb[j]
+            p = pa[i] * pb[j] * _dc_tau(i, j, lam_a, lam_b, RHO)
+            total_mass += p
             if i > j:
                 home += p
             elif i == j:
@@ -241,13 +299,20 @@ def extended_markets(team_a: str, team_b: str) -> Dict:
             total_dist[i + j] += p
             score_probs.append((i, j, p))
 
+    # Renormalise after the DC correction so every leg's probability is honest.
+    if total_mass > 0:
+        home /= total_mass; draw /= total_mass; away /= total_mass
+        total_dist = [t / total_mass for t in total_dist]
+        score_probs = [(i, j, p / total_mass) for i, j, p in score_probs]
+
     def total_over(line: int) -> float:  # P(total goals > line.5) = P(total >= line+1)
         return sum(total_dist[line + 1:])
 
     def team_over(vec, line: int) -> float:  # P(team goals > line.5)
         return 1 - sum(vec[:line + 1])
 
-    btts_yes = (1 - pa[0]) * (1 - pb[0])
+    # BTTS straight off the (DC-corrected, normalised) scoreline matrix so it stays consistent.
+    btts_yes = sum(p for i, j, p in score_probs if i >= 1 and j >= 1)
 
     # Winning margin / spread (matches Kalshi's "Team wins by more than X.5 goals").
     home_by_2plus = sum(p for i, j, p in score_probs if i - j >= 2)
@@ -304,14 +369,15 @@ def extended_markets(team_a: str, team_b: str) -> Dict:
     }
     return {
         "team_a": team_a, "team_b": team_b,
+        "stage": st.get("stage"),
         "expected_goals": {"a": round(lam_a, 2), "b": round(lam_b, 2)},
         "markets": {k: v for k, v in markets.items() if v},
     }
 
 
-def _remaining_dists(home, away, sa, sb, minute, red_a=0, red_b=0):
+def _remaining_dists(home, away, sa, sb, minute, red_a=0, red_b=0, stage=None):
     """Poisson distributions for the goals STILL TO COME, given score + time + red cards."""
-    lam_a, lam_b = _expected_goals(home, away)
+    lam_a, lam_b = _expected_goals(home, away, stage)
     # Red card adjustment: a man down ~ -28% your goals, +12% the opponent's, per card.
     # (Active only when a live-events feed reports cards; defaults to 0 = no effect.)
     for _ in range(int(red_a)):

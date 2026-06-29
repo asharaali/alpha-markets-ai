@@ -34,7 +34,12 @@ EVAL_START = date(2018, 1, 1)
 # Ignore the very old, sparse era for rating stability; still used for burn-in from here.
 HISTORY_START = date(1990, 1, 1)
 MAX_GOALS = 6
-EPOCHS = 3  # warm-start passes so early ratings converge ("train over and over")
+EPOCHS = 5  # warm-start passes so early ratings converge ("train over and over")
+# NOTE on recency weighting: we tested decaying older results so recent form counts more.
+# It consistently HURT out-of-sample log loss on this international dataset (all history
+# helps rating stability), so we don't do it. The model instead "learns more" three honest
+# ways: (1) Dixon-Coles correction below, (2) multi-epoch warm start, (3) live Elo updates
+# after every real result (soccer_model.update_after_result) + the reality-factor loop.
 
 # Canonicalise dataset names to match the live odds/Kalshi feeds.
 NAME_MAP = {
@@ -69,18 +74,32 @@ def _pmf_vec(lam: float) -> list[float]:
     return v
 
 
+def _dc_tau(i, j, lam_h, lam_a, rho):
+    """Dixon-Coles low-score correction (same as the live model)."""
+    if i == 0 and j == 0:
+        return 1.0 - lam_h * lam_a * rho
+    if i == 0 and j == 1:
+        return 1.0 + lam_h * rho
+    if i == 1 and j == 0:
+        return 1.0 + lam_a * rho
+    if i == 1 and j == 1:
+        return 1.0 - rho
+    return 1.0
+
+
 def outcome_probs(r_home, r_away, neutral, p):
-    """(P_home, P_draw, P_away) from ratings + params p."""
+    """(P_home, P_draw, P_away) from ratings + params p, with Dixon-Coles correction."""
     eff = r_home - r_away + (0 if neutral else p["home_adv"])
     supremacy = eff / p["elo_per_goal"]
     lam_h = max(0.15, (p["base_goals"] + supremacy) / 2)
     lam_a = max(0.15, (p["base_goals"] - supremacy) / 2)
     ph, pa = _pmf_vec(lam_h), _pmf_vec(lam_a)
+    rho = p.get("rho", 0.0)
     home = draw = away = 0.0
     for i in range(MAX_GOALS + 1):
         pi = ph[i]
         for j in range(MAX_GOALS + 1):
-            pij = pi * pa[j]
+            pij = pi * pa[j] * _dc_tau(i, j, lam_h, lam_a, rho)
             if i > j:
                 home += pij
             elif i == j:
@@ -91,7 +110,7 @@ def outcome_probs(r_home, r_away, neutral, p):
     return home / s, draw / s, away / s
 
 
-def elo_update(r_home, r_away, gh, ga, neutral, p):
+def elo_update(r_home, r_away, gh, ga, neutral, p, w=1.0):
     eff = r_home - r_away + (0 if neutral else p["home_adv"])
     exp_home = 1.0 / (1 + 10 ** (-eff / 400.0))
     if gh > ga:
@@ -102,7 +121,7 @@ def elo_update(r_home, r_away, gh, ga, neutral, p):
         sc = 0.0
     margin = abs(gh - ga)
     mult = math.log(margin + 1) + 1
-    delta = p["k"] * mult * (sc - exp_home)
+    delta = p["k"] * mult * (sc - exp_home) * w   # w = recency weight
     return r_home + delta, r_away - delta
 
 
@@ -163,12 +182,14 @@ def grid_search(matches):
         "home_adv": [40, 65, 90],
         "elo_per_goal": [180, 220, 260],
         "base_goals": [2.5, 2.7],
+        "rho": [0.0, -0.07, -0.12],   # Dixon-Coles draw/low-score correction
     }
     best = None
     combos = [
-        {"k": k, "home_adv": h, "elo_per_goal": e, "base_goals": b}
+        {"k": k, "home_adv": h, "elo_per_goal": e, "base_goals": b, "rho": r}
         for k in grid["k"] for h in grid["home_adv"]
         for e in grid["elo_per_goal"] for b in grid["base_goals"]
+        for r in grid["rho"]
     ]
     print(f"Grid-searching {len(combos)} parameter sets over {len(matches)} matches…")
     for i, p in enumerate(combos, 1):
