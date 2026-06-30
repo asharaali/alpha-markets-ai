@@ -12,6 +12,7 @@ document.querySelectorAll(".tab").forEach((t) => {
     t.classList.add("active");
     document.getElementById(t.dataset.tab).classList.add("active");
     if (t.dataset.tab === "kalshi") loadKalshi();
+    if (t.dataset.tab === "singles") loadSingles();
     if (t.dataset.tab === "record") loadRecord();
     if (t.dataset.tab === "autobet") loadAutobet();
     if (t.dataset.tab === "combo") loadComboGames();
@@ -577,6 +578,94 @@ function kalshiCard(g) {
     <div class="meta">${g.value_count} value</div></div>
     <div class="sugg">${rows}</div></div>`;
 }
+
+/* ---------- Single Bets ---------- */
+let _singles = [];
+async function loadSingles() {
+  const wrap = document.getElementById("singlesList");
+  wrap.innerHTML = `<div class="empty">Loading every Kalshi market + cross-checking the books…</div>`;
+  try {
+    const d = await (await fetch(`${API}/api/kalshi/singles`)).json();
+    _singles = d.bets || [];
+    const sel = document.getElementById("singleCat");
+    if (sel.options.length <= 1)
+      sel.innerHTML = `<option value="">All categories</option>`
+        + (d.categories || []).map((c) => `<option value="${c}">${c}</option>`).join("");
+    renderSingles();
+  } catch (e) {
+    wrap.innerHTML = `<div class="empty">Couldn't load single bets.</div>`;
+  }
+}
+
+function renderSingles() {
+  const cat = document.getElementById("singleCat").value;
+  const valueOnly = document.getElementById("singleValueOnly").checked;
+  let rows = _singles.filter((b) => (!cat || b.category === cat) && (!valueOnly || b.value_bet));
+  const wrap = document.getElementById("singlesList");
+  if (!rows.length) { wrap.innerHTML = `<div class="empty">No markets match. Try the All filter or refresh.</div>`; return; }
+  wrap.innerHTML = rows.slice(0, 80).map(singleCard).join("");
+  rows.slice(0, 80).forEach((b) => {
+    const el = document.getElementById(`place-${b.ticker}`);
+    if (el) el.onclick = () => placeSingle(b);
+  });
+}
+
+function confBadge(b) {
+  if (b.confidence === "high") return `<span class="result-badge won" title="${b.sources}">✅ books agree</span>`;
+  if (b.confidence === "medium") return `<span class="result-badge" style="background:var(--amber)" title="${b.sources}">⚠️ books disagree</span>`;
+  return `<span class="result-badge" style="background:#3a4a6b" title="${b.sources}">🔵 model-only</span>`;
+}
+
+function singleCard(b) {
+  const bookTxt = b.book_prob != null ? `books ${(b.book_prob*100).toFixed(0)}%` : "no book line";
+  const star = b.value_bet ? `<span class="star">★ VALUE</span>` : "";
+  return `<div class="card ${b.value_bet ? "" : "dim"}">
+    <div class="card-head">
+      <div class="teams">${b.selection} ${star}</div>
+      <div class="meta">${b.category} · ${b.bet_type}</div>
+    </div>
+    <div class="sugg">
+      <div class="sugg-row">
+        <span class="name">${b.home} v ${b.away}</span>
+        <span class="odds">${b.kalshi_price_cents}¢ <small>model ${(b.model_prob*100).toFixed(0)}% · ${bookTxt}</small></span>
+        <span class="ev ${b.ev_per_dollar>0?'pos':'neg'}">${b.ev_per_dollar>0?"+":""}${(b.ev_per_dollar*100).toFixed(0)}%</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+        ${confBadge(b)}
+        <button id="place-${b.ticker}" class="btn ${b.value_bet?'primary':''}">Place / paper</button>
+      </div>
+    </div></div>`;
+}
+
+async function placeSingle(b) {
+  const amount = parseFloat(document.getElementById("singleAmount").value) || 0;
+  if (amount <= 0) return alert("Enter an amount first.");
+  const live = document.getElementById("singleLive").checked;
+  if (live && !confirm(`Place ${b.selection} LIVE on Kalshi for $${amount} of REAL money?`)) return;
+  // A single bet is a 1-leg combo carrying its exact Kalshi ticker.
+  const combo = { legs: [{
+    label: b.selection, model_prob: b.fair_prob,
+    market_odds_decimal: b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99,
+    home: b.home, away: b.away, market: b.bet_type, selection: b.selection,
+    kalshi_ticker: b.ticker,
+  }], leg_count: 1, combined_model_prob: b.fair_prob,
+    combined_odds_decimal: b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99,
+    payout_multiple: b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99 };
+  const btn = document.getElementById(`place-${b.ticker}`);
+  btn.disabled = true; btn.textContent = "Placing…";
+  try {
+    const r = await (await fetch(`${API}/api/combo/place`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ combo, amount, mode: live ? "live" : "paper", book: "Kalshi" }),
+    })).json();
+    if (r.error) { alert(r.error); btn.disabled = false; btn.textContent = "Place / paper"; return; }
+    btn.textContent = r.mode === "live" ? "✓ Placed LIVE" : "✓ Placed (paper)";
+  } catch (e) { alert("Couldn't place: " + e); btn.disabled = false; btn.textContent = "Place / paper"; }
+}
+
+document.getElementById("singleCat").addEventListener("change", renderSingles);
+document.getElementById("singleValueOnly").addEventListener("change", renderSingles);
+document.getElementById("singleRefresh").addEventListener("click", loadSingles);
 
 /* ---------- Record / learning ---------- */
 let recordPoll = null;

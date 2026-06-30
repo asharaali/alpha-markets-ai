@@ -172,6 +172,26 @@ async def place_leg_detailed(home: str, away: str, selection: str, stake_dollars
             "entry_price": round(cost, 4), "count": int(stake_dollars / cost)}
 
 
+async def place_ticker_detailed(ticker: str, stake_dollars: float):
+    """Buy YES on a specific Kalshi ticker (used for single bets that already know their
+    ticker — all the non-moneyline markets). Returns structured info like place_leg_detailed."""
+    try:
+        async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "AlphaMarketsAI/1.0"}) as c:
+            _yb, yes_ask, _d = await orderbook_prices(c, ticker)
+    except Exception as exc:
+        return {"ok": False, "info": f"book error: {exc}", "ticker": ticker}
+    if not yes_ask:
+        return {"ok": False, "info": "no live ask (illiquid)", "ticker": ticker}
+    ok, info = await place_order(ticker, "yes", stake_dollars)
+    return {"ok": ok, "info": info, "ticker": ticker,
+            "entry_price": round(yes_ask, 4), "count": int(stake_dollars / yes_ask)}
+
+
+async def close_ticker(ticker: str, stake_dollars: float):
+    """Cash out a YES position by ticker: sell YES (= buy NO into the bid). Returns (ok, info)."""
+    return await place_order(ticker, "no", stake_dollars)
+
+
 async def close_position(home: str, away: str, selection: str, stake_dollars: float):
     """
     Cash out a YES position: SELL YES by buying NO into the current bid (this is exactly how

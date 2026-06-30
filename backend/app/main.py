@@ -244,6 +244,23 @@ async def kalshi():
     return {"count": len(games), "tradeable": tradeable, "games": games}
 
 
+@app.get("/api/kalshi/singles")
+async def kalshi_singles(category: Optional[str] = None):
+    """
+    Every INDIVIDUAL Kalshi World Cup bet (moneyline, spread, totals, BTTS, corners,
+    correct score, player goalscorer, to-advance), each with the model's fair value AND a
+    multi-bookmaker consensus cross-check so you can see how good each bet really is.
+    """
+    from app.data_sources.kalshi_single import get_single_bets, SERIES
+    board = await get_soccer_matches()
+    bets = await get_single_bets(board)
+    if category:
+        bets = [b for b in bets if b["category"].lower() == category.lower()]
+    cats = sorted({s[0] for s in SERIES.values()})
+    return {"count": len(bets), "categories": cats,
+            "value_count": sum(b["value_bet"] for b in bets), "bets": bets}
+
+
 @app.get("/api/weather")
 async def weather(bankroll: Optional[float] = None):
     """Markets tab: Kalshi daily-high temperature contracts priced against the NWS forecast."""
@@ -340,16 +357,17 @@ async def combo_place(req: PlaceComboRequest, request: Request):
     placed_legs, all_ok = [], True
     for lg in legs:
         leg = dict(lg)
+        preset_ticker = lg.get("kalshi_ticker")    # single bets arrive with their exact ticker
         if go_live:
-            from app.kalshi_trade import place_leg_detailed
-            r = await place_leg_detailed(lg["home"], lg["away"], lg["selection"], per_leg)
-            leg["kalshi_ticker"] = r.get("ticker")
+            from app.kalshi_trade import place_leg_detailed, place_ticker_detailed
+            r = (await place_ticker_detailed(preset_ticker, per_leg) if preset_ticker
+                 else await place_leg_detailed(lg["home"], lg["away"], lg["selection"], per_leg))
+            leg["kalshi_ticker"] = r.get("ticker") or preset_ticker
             leg["kalshi_entry"] = r.get("entry_price")
             leg["place_status"] = "LIVE ✓" if r.get("ok") else f"live failed: {r.get('info')}"
             all_ok = all_ok and bool(r.get("ok"))
         else:
             # Paper fill at the leg's fair price implied by its odds.
-            leg["kalshi_ticker"] = None
             leg["kalshi_entry"] = round(1.0 / float(lg["market_odds_decimal"]), 4)
             leg["place_status"] = "paper ✓"
         placed_legs.append(leg)
@@ -401,12 +419,15 @@ async def combo_cashout(req: CashoutComboRequest, request: Request):
     value = await _combo_cashout_value(user, bet)
     sold, live = [], bool(bet.get("placed_on_kalshi")) and autobet.live_available(user)
     if live:
-        from app.kalshi_trade import close_position
+        from app.kalshi_trade import close_ticker, close_position
+        per = bet.get("stake", 0) / max(1, len(bet.get("legs", [])))
         for lg in bet.get("legs", []):
-            if lg.get("kalshi_ticker"):
-                ok, info = await close_position(lg["home"], lg["away"], lg["selection"],
-                                                bet.get("stake", 0) / max(1, len(bet["legs"])))
-                sold.append({"leg": lg.get("label"), "ok": ok, "info": info})
+            tk = lg.get("kalshi_ticker")
+            if tk:                                  # sell by ticker (works for every market)
+                ok, info = await close_ticker(tk, per)
+            else:
+                ok, info = await close_position(lg["home"], lg["away"], lg["selection"], per)
+            sold.append({"leg": lg.get("label"), "ok": ok, "info": info})
 
     b = bet_log.cashout_bet(user, req.bet_id, value,
                             source="live Kalshi sell" if live else "paper cash-out")

@@ -43,6 +43,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="dashboard">Live Board</button>
     <button class="tab" data-tab="kalshi">Kalshi</button>
+    <button class="tab" data-tab="singles">🎯 Single Bets</button>
     <button class="tab" data-tab="combo">Combo Builder</button>
     <button class="tab" data-tab="cashout">Cash-Out Checker</button>
     <button class="tab" data-tab="record">My Record</button>
@@ -75,6 +76,22 @@
       <h2>Kalshi — World Cup markets</h2>
       <p class="muted">Live Kalshi game markets with our trained model overlaid. Prices are in cents (55¢ = 55% implied). ★ = model sees value vs Kalshi's price. Untraded markets show no price until Kalshi gets liquidity.</p>
       <div id="kalshiGames" class="matches"></div>
+    </section>
+
+    <!-- SINGLE BETS -->
+    <section id="singles" class="panel">
+      <h2>🎯 Single Bets — every Kalshi market</h2>
+      <p class="muted">Each individual Kalshi World Cup bet — moneyline, spread, totals, BTTS, corners, correct score, player goalscorer, to-advance — with the model's fair value <b>and a multi-bookmaker cross-check</b>. ✅ high = the books back the model. ⚠️ medium = books disagree (sit out). 🔵 model-only = Kalshi-exclusive market. Enter an amount, then place or paper-test it.</p>
+      <div class="singles-controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <select id="singleCat"><option value="">All categories</option></select>
+        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">value only
+          <input type="checkbox" id="singleValueOnly"></label>
+        <input id="singleAmount" type="number" placeholder="$ amount" value="10" style="width:90px">
+        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">
+          <input type="checkbox" id="singleLive"> LIVE (real money)</label>
+        <button id="singleRefresh" class="btn">↻ Refresh</button>
+      </div>
+      <div id="singlesList" class="matches"></div>
     </section>
 
     <!-- COMBO BUILDER -->
