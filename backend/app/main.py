@@ -261,6 +261,17 @@ async def kalshi_singles(category: Optional[str] = None):
             "value_count": sum(b["value_bet"] for b in bets), "bets": bets}
 
 
+@app.get("/api/research")
+async def research_bet(home: str, away: str, player: Optional[str] = None):
+    """
+    Web research for a specific bet: recent Google News headlines for the matchup (and a
+    player, for props) with automatic injury / suspension / lineup flags. Reads the public
+    news feed — no key — so you can sanity-check a bet against what's actually being reported.
+    """
+    from app.news_research import research
+    return await research(home, away, player)
+
+
 @app.get("/api/weather")
 async def weather(bankroll: Optional[float] = None):
     """Markets tab: Kalshi daily-high temperature contracts priced against the NWS forecast."""

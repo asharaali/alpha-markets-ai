@@ -607,7 +607,26 @@ function renderSingles() {
   rows.slice(0, 80).forEach((b) => {
     const el = document.getElementById(`place-${b.ticker}`);
     if (el) el.onclick = () => placeSingle(b);
+    const rb = document.getElementById(`research-btn-${b.ticker}`);
+    if (rb) rb.onclick = () => researchSingle(b);
   });
+}
+
+function _safeId(t) { return t.replace(/[^a-zA-Z0-9]/g, ""); }
+
+async function researchSingle(b) {
+  const panel = document.getElementById(`research-${_safeId(b.ticker)}`);
+  panel.style.display = "block";
+  panel.innerHTML = `<div class="sub">🔎 Pulling recent news…</div>`;
+  const player = b.bet_type === "Goalscorer" ? b.selection.replace(/\s+\d+\+.*/, "").trim() : "";
+  const q = new URLSearchParams({ home: b.home, away: b.away, ...(player ? { player } : {}) });
+  try {
+    const d = await (await fetch(`${API}/api/research?${q}`)).json();
+    const items = (d.headlines || []).map((h) =>
+      `<div class="sugg-row"><span class="name">${h.risk ? "⚠️ " : ""}${h.title}</span>
+       <span class="odds"><small>${h.source} · ${h.age_hours}h</small></span></div>`).join("");
+    panel.innerHTML = `<p class="sub" style="margin:6px 0">${d.summary}</p>${items || `<div class="sub">No recent coverage.</div>`}`;
+  } catch (e) { panel.innerHTML = `<div class="sub">Couldn't load research.</div>`; }
 }
 
 function confBadge(b) {
@@ -630,10 +649,14 @@ function singleCard(b) {
         <span class="odds">${b.kalshi_price_cents}¢ <small>model ${(b.model_prob*100).toFixed(0)}% · ${bookTxt}</small></span>
         <span class="ev ${b.ev_per_dollar>0?'pos':'neg'}">${b.ev_per_dollar>0?"+":""}${(b.ev_per_dollar*100).toFixed(0)}%</span>
       </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px">
         ${confBadge(b)}
-        <button id="place-${b.ticker}" class="btn ${b.value_bet?'primary':''}">Place / paper</button>
+        <div style="display:flex;gap:6px">
+          <button id="research-btn-${b.ticker}" class="btn" title="Recent news + injury check">🔎 Research</button>
+          <button id="place-${b.ticker}" class="btn ${b.value_bet?'primary':''}">Place / paper</button>
+        </div>
       </div>
+      <div id="research-${_safeId(b.ticker)}" class="research-panel" style="display:none;margin-top:8px;border-top:1px solid var(--line,#2a3550);padding-top:8px"></div>
     </div></div>`;
 }
 
