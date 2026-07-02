@@ -60,6 +60,25 @@ def canon(name: str) -> str:
     return NAME_MAP.get(name, name)
 
 
+def comp_weight(tournament: str) -> float:
+    """Match-importance weight on the Elo update (like the World Football Elo 'K index').
+    Friendlies are noisy — teams rest starters and experiment — so a friendly result should
+    move ratings far less than a World Cup game. Majors move them most."""
+    t = (tournament or "").lower()
+    if "friendly" in t:
+        return 0.5
+    if "qualif" in t:                       # WC/Euro/AFCON/etc qualifiers
+        return 1.0
+    if t == "fifa world cup":
+        return 1.5
+    if "nations league" in t:
+        return 1.1
+    if any(k in t for k in ("uefa euro", "copa am", "african cup of nations",
+                            "afc asian cup", "gold cup", "confederations cup")):
+        return 1.25                          # continental / intercontinental finals
+    return 0.7                               # minor & regional tournaments
+
+
 # ---------- fast Poisson with memoised pmf vectors ----------
 _FACT = [math.factorial(i) for i in range(MAX_GOALS + 1)]
 _PMF_CACHE: dict[float, list[float]] = {}
@@ -137,7 +156,8 @@ def load_matches():
             if d < HISTORY_START:
                 continue
             rows.append((d, canon(row["home_team"]), canon(row["away_team"]),
-                         gh, ga, row["neutral"].strip().upper() == "TRUE"))
+                         gh, ga, row["neutral"].strip().upper() == "TRUE",
+                         comp_weight(row.get("tournament", ""))))
     rows.sort(key=lambda r: r[0])
     return rows
 
@@ -149,7 +169,7 @@ def run_walkforward(matches, p, ratings=None, score=True):
     ll = brier = 0.0
     correct = n = 0
     calib = [[0, 0.0, 0] for _ in range(10)]  # [count, sum_pred_for_argmax, hits]
-    for d, home, away, gh, ga, neutral in matches:
+    for d, home, away, gh, ga, neutral, w in matches:
         rh, ra = ratings[home], ratings[away]
         if score and d >= EVAL_START:
             P = outcome_probs(rh, ra, neutral, p)
@@ -164,7 +184,13 @@ def run_walkforward(matches, p, ratings=None, score=True):
             calib[b][0] += 1
             calib[b][1] += probs[pred]
             calib[b][2] += (pred == actual)
-        ratings[home], ratings[away] = elo_update(rh, ra, gh, ga, neutral, p)
+        # NOTE: competition-importance weighting (down-weighting friendlies via comp_weight)
+        # was A/B tested here and REJECTED — it was slightly worse out-of-sample even on
+        # competitive-only matches (0.8554 vs 0.8544 log loss). Same lesson as recency
+        # weighting: on this international dataset, every result at full weight builds the
+        # best ratings (friendlies are noisy but still carry real signal). Kept the machinery
+        # (comp_weight + w in the row) documented for future experiments; we train at w=1.0.
+        ratings[home], ratings[away] = elo_update(rh, ra, gh, ga, neutral, p, w=1.0)
     if not n:
         return None, ratings
     return {
@@ -177,12 +203,15 @@ def run_walkforward(matches, p, ratings=None, score=True):
 
 
 def grid_search(matches):
+    # Grid widened June 2026: the prior optimum sat on the boundary for home_adv (90),
+    # base_goals (2.7) and rho (-0.12), which means the true best was likely OUTSIDE the old
+    # grid. We now search past those edges so the params aren't clipped.
     grid = {
-        "k": [20, 30, 40],
-        "home_adv": [40, 65, 90],
+        "k": [20, 30, 40, 50],
+        "home_adv": [65, 90, 115, 140],
         "elo_per_goal": [180, 220, 260],
-        "base_goals": [2.5, 2.7],
-        "rho": [0.0, -0.07, -0.12],   # Dixon-Coles draw/low-score correction
+        "base_goals": [2.6, 2.7, 2.8, 2.9],
+        "rho": [-0.07, -0.12, -0.16, -0.20],   # Dixon-Coles draw/low-score correction
     }
     best = None
     combos = [
@@ -204,9 +233,7 @@ def grid_search(matches):
 def baseline_logloss(matches):
     """Naive baseline: always predict the historical base rate of home/draw/away."""
     h = d = a = 0
-    for dt, *_rest in matches:
-        pass
-    for dt, home, away, gh, ga, neutral in matches:
+    for dt, home, away, gh, ga, neutral, w in matches:
         if dt < EVAL_START:
             continue
         if gh > ga:
@@ -219,7 +246,7 @@ def baseline_logloss(matches):
     base = [h / tot, d / tot, a / tot]
     ll = 0.0
     n = 0
-    for dt, home, away, gh, ga, neutral in matches:
+    for dt, home, away, gh, ga, neutral, w in matches:
         if dt < EVAL_START:
             continue
         actual = 0 if gh > ga else (1 if gh == ga else 2)
