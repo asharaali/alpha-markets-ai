@@ -50,6 +50,12 @@ SERIES = {
 _CACHE: Dict[str, object] = {"data": None, "ts": 0.0}
 _CACHE_TTL = 90
 
+# Player props are priced for REFERENCE only, never flagged as value: the goalscorer model
+# is rate-based and blind to what the prop market actually prices — the starting XI, who's
+# on penalties, injuries, tactical role. A big model-vs-market gap there is our blind spot,
+# not an edge (same discipline as the MLB player props).
+_REFERENCE_SERIES = {"KXWCGOAL"}
+
 
 def _canon(name: str) -> str:
     return KALSHI_NAME_MAP.get((name or "").strip(), (name or "").strip())
@@ -327,6 +333,10 @@ async def get_single_bets(board: Optional[List[Dict]] = None) -> List[Dict]:
                 continue
             book_prob = _book_prob_for(series, label, lk, cons)
             ev = _evaluate(mp, price, book_prob, cons["n"] if cons else 0)
+            if series in _REFERENCE_SERIES:          # player props: reference-only, never a value flag
+                ev["value_bet"] = False
+                ev["confidence"] = "reference"
+                ev["sources"] = "model rate — not lineup/penalty-taker/injury adjusted (reference only)"
             out.append({
                 "ticker": m.get("ticker"), "category": cat, "bet_type": bet_type,
                 "home": home, "away": away, "selection": label,
