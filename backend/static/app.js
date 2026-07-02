@@ -896,8 +896,11 @@ async function loadModelInfo() {
     const d = await (await fetch(sp(`${API}/api/model-info`))).json();
     const b = document.getElementById("modelBadge");
     if (d.trained) {
+      const n = d.n_matches_trained || d.n_games_trained;
+      const noun = SPORT === "mlb" ? "games" : "matches";
       b.textContent = `model ✓ ${(d.metrics.accuracy*100).toFixed(0)}% · ${d.n_teams} teams`;
-      b.title = `Trained on ${d.n_matches_trained} matches. Out-of-sample log loss ${d.metrics.log_loss.toFixed(3)} (baseline ${d.baseline_log_loss}).`;
+      b.title = `Trained on ${n} ${noun}. Out-of-sample log loss ${d.metrics.log_loss.toFixed(3)}`
+        + (d.baseline_log_loss ? ` (baseline ${d.baseline_log_loss}).` : ".");
       b.classList.add("live");
     } else {
       b.textContent = "model: untrained";

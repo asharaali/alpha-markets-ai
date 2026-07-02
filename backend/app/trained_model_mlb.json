@@ -1,0 +1,74 @@
+{
+  "trained_at": "2026-07-02",
+  "sport": "mlb",
+  "n_games_trained": 19437,
+  "eval_start": "2022-01-01",
+  "params": {
+    "k": 3,
+    "hfa_elo": 24,
+    "elo_per_run": 82,
+    "nb_dispersion": 3.5,
+    "base_runs": 8.6,
+    "default_elo": 1460.0
+  },
+  "metrics": {
+    "log_loss": 0.6789233257100227,
+    "brier": 0.24293431956672124,
+    "accuracy": 0.5714089724242009,
+    "n_eval": 7289
+  },
+  "baseline_log_loss": 0.6919,
+  "home_win_rate": 0.525,
+  "calibration": [
+    {
+      "bin": "50-60%",
+      "games": 4695,
+      "predicted": 0.547,
+      "actual": 0.542
+    },
+    {
+      "bin": "60-70%",
+      "games": 2213,
+      "predicted": 0.64,
+      "actual": 0.616
+    },
+    {
+      "bin": "70-80%",
+      "games": 381,
+      "predicted": 0.726,
+      "actual": 0.672
+    }
+  ],
+  "ratings": {
+    "Chicago Cubs": 1524.2,
+    "St. Louis Cardinals": 1502.3,
+    "Detroit Tigers": 1518.4,
+    "Minnesota Twins": 1477.5,
+    "Houston Astros": 1555.7,
+    "Cleveland Guardians": 1519.6,
+    "Kansas City Royals": 1497.3,
+    "Chicago White Sox": 1338.8,
+    "New York Yankees": 1540.1,
+    "Toronto Blue Jays": 1482.5,
+    "Athletics": 1428.4,
+    "Texas Rangers": 1481.3,
+    "Seattle Mariners": 1533.7,
+    "Los Angeles Angels": 1398.8,
+    "Tampa Bay Rays": 1516.0,
+    "Baltimore Orioles": 1533.2,
+    "Arizona Diamondbacks": 1546.5,
+    "San Francisco Giants": 1499.1,
+    "Cincinnati Reds": 1485.3,
+    "Pittsburgh Pirates": 1466.3,
+    "Los Angeles Dodgers": 1588.3,
+    "San Diego Padres": 1567.4,
+    "Miami Marlins": 1443.6,
+    "Atlanta Braves": 1558.9,
+    "Milwaukee Brewers": 1557.6,
+    "Colorado Rockies": 1407.8,
+    "Philadelphia Phillies": 1548.8,
+    "Boston Red Sox": 1489.6,
+    "Washington Nationals": 1446.6,
+    "New York Mets": 1546.3
+  }
+}
