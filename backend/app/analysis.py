@@ -17,8 +17,11 @@ from app import probability as P
 from app import sports
 from app.config import settings
 
-# Knockout soccer uses a tighter set of clean markets for parlay legs.
-_KNOCKOUT_RE = re.compile(r"match result|goalscorer|corners", re.I)
+# Knockout soccer uses a tighter set of clean markets for parlay legs — but not SO tight
+# that only match-result + corners survive (which made every parlay corner spam). Totals and
+# double-chance hold up fine in knockouts; we still drop the noisy legs (exact margin/spread,
+# BTTS) that a tight, low-event knockout game makes unreliable.
+_KNOCKOUT_RE = re.compile(r"match result|double chance|total goals|corners", re.I)
 
 
 def _stage_for(sport: str) -> Optional[Dict]:
@@ -78,11 +81,31 @@ def _resolve_tier(style: str, stage: Optional[Dict]) -> tuple[float, int]:
     return target, n
 
 
+# How much we trust each market type as a parlay leg. Match result is the model's
+# strongest suit; corners are rate-based (no tactics/game-state) so we lean on them least.
+# A leg's pick score = distance-from-target / reliability, so higher-trust markets win ties.
+_MARKET_RELIABILITY = {
+    "match result": 1.00, "moneyline": 1.00, "total goals": 0.90, "total runs": 0.90,
+    "double chance": 0.90, "run line": 0.85, "winning margin": 0.82, "spread": 0.82,
+    "team total": 0.80, "both teams to score": 0.78, "first 5": 0.80,
+    "total corners": 0.62, "correct score": 0.55, "goalscorer": 0.50,
+}
+
+
+def _reliability(market: str) -> float:
+    m = (market or "").lower()
+    for k, v in _MARKET_RELIABILITY.items():
+        if k in m:
+            return v
+    return 0.75
+
+
 def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs: Optional[int] = None,
                       bankroll: Optional[float] = None, sport: str = "soccer") -> Dict:
     """Auto-build a parlay across the sport's parlay-eligible markets at the chosen risk tier.
-    One leg per (game, market type) so it's varied. Each leg is picked near the tier's target
-    probability => smooth grading across tiers. Soccer is stage-aware; MLB is not."""
+    Legs are picked near the tier's target probability, but DIVERSIFIED — one leg per game and
+    (where possible) one per market type, favouring the markets the model is most reliable on —
+    so you don't get three near-identical corner-unders. Soccer is stage-aware; MLB is not."""
     stage = _stage_for(sport)
     style = style.lower().strip()
     target, n = _resolve_tier(style, stage)
@@ -92,19 +115,31 @@ def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs:
     cands = []
     for g in games:
         cands += _candidate_legs(g["home"], g["away"], sport, stage)
+    # Player props are reference-only (lineup-blind) — never auto-build them into a parlay.
+    cands = [c for c in cands if "goalscorer" not in c["mtype"].lower()]
     if not cands:
         return {"error": "no games/markets found for that day"}
 
-    cands.sort(key=lambda c: abs(c["model_prob"] - target))
-    picked, used = [], set()
-    for c in cands:
-        key = (c["home"], c["away"], c["mtype"])
-        if key in used:
-            continue
-        picked.append(c)
-        used.add(key)
-        if len(picked) >= n:
-            break
+    # Rank by closeness to the tier target, scaled by how much we trust that market.
+    cands.sort(key=lambda c: abs(c["model_prob"] - target) / _reliability(c["market"]))
+
+    def _fill(require_distinct_type: bool):
+        used_games = {(l["home"], l["away"]) for l in picked}
+        used_types = {l["market"] for l in picked}
+        for c in cands:
+            if len(picked) >= n:
+                break
+            if (c["home"], c["away"]) in used_games:
+                continue
+            if require_distinct_type and c["market"] in used_types:
+                continue
+            picked.append(c)
+            used_games.add((c["home"], c["away"]))
+            used_types.add(c["market"])
+
+    picked: List[Dict] = []
+    _fill(require_distinct_type=True)      # first pass: force market-type variety
+    _fill(require_distinct_type=False)     # top up if the slate is too small to stay varied
 
     if not picked:
         return {"error": f"no legs found for '{style}' that day"}
@@ -137,7 +172,11 @@ def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
                 value_legs.append({
                     "home": m["home"], "away": m["away"], "market": win_market,
                     "selection": s["selection"], "label": f"{m['home']} v {m['away']}: {s['selection']}",
-                    "model_prob": s["model_prob"], "market_odds_decimal": s["market_odds_decimal"],
+                    # Use the market-SHRUNK fair prob (what we actually trust), not the raw
+                    # model prob. Multiplying raw model probs across legs compounds small
+                    # per-leg errors into fantasy EV (the old "+199% parlay" bug).
+                    "model_prob": s.get("fair_prob", s["model_prob"]),
+                    "market_odds_decimal": s["market_odds_decimal"],
                     "ev": s["ev_per_dollar"],
                 })
     if not value_legs:
