@@ -367,14 +367,17 @@ function matchCard(m) {
     }
   }
 
-  // Probable starting pitchers (MLB) — the biggest driver of the matchup.
+  // Probable starting pitchers + bullpen (MLB) — the biggest driver of the matchup.
   let pitchersLine = "";
   if (isMlb && (m.sp_home_name || m.sp_away_name)) {
-    const fmt = (name, era, label) => name
-      ? `${name}${era != null ? ` <span class="muted">${era} ERA</span>` : ""} <span class="sp-tag ${label}">${label}</span>`
+    // bullpen mult < 1 = allows fewer runs = better; show + when the pen is a strength.
+    const pen = (b) => b != null && Math.abs(b - 1) > 0.02
+      ? ` <span class="muted" title="team bullpen vs league avg run prevention">pen ${b < 1 ? "+" : ""}${((1 - b) * 100).toFixed(0)}%</span>` : "";
+    const fmt = (name, era, label, b) => name
+      ? `${name}${era != null ? ` <span class="muted">${era} ERA</span>` : ""} <span class="sp-tag ${label}">${label}</span>${pen(b)}`
       : `<span class="muted">TBD</span>`;
-    pitchersLine = `<div class="pitchers">⚾ Starters · ${fmt(m.sp_away_name, m.sp_away_era, m.sp_away_label)}`
-      + ` <span class="muted">@</span> ${fmt(m.sp_home_name, m.sp_home_era, m.sp_home_label)}</div>`;
+    pitchersLine = `<div class="pitchers">⚾ Starters · ${fmt(m.sp_away_name, m.sp_away_era, m.sp_away_label, m.sp_away_bullpen)}`
+      + ` <span class="muted">@</span> ${fmt(m.sp_home_name, m.sp_home_era, m.sp_home_label, m.sp_home_bullpen)}</div>`;
   }
 
   // Live win-probability shift vs pre-game (so you can see momentum swing).

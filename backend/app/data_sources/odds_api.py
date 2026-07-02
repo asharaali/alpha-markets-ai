@@ -335,6 +335,7 @@ async def _attach_mlb_starters(matches: List[Dict]) -> None:
                 m[f"sp_{side}_name"] = info.get("name")
                 m[f"sp_{side}_era"] = info.get("era")
                 m[f"sp_{side}_label"] = info.get("label")
+                m[f"sp_{side}_bullpen"] = info.get("bullpen")
 
 
 async def _fetch_matches(key: str) -> List[Dict]:

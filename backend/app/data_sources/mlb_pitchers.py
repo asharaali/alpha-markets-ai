@@ -22,6 +22,7 @@ is exactly what the trained team-Elo model assumes, so the ratings stay unbiased
 above/below-average starters move the line.
 """
 from __future__ import annotations
+import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
@@ -47,14 +48,17 @@ def quality_label(mult: float) -> str:
     return "weak"
 
 
-_RATING_CACHE: Dict[int, Tuple[float, Dict, float]] = {}   # pid -> (mult, info, ts)
+_RATING_CACHE: Dict[int, Tuple[float, Dict, float]] = {}   # pid -> (starter_talent_mult, info, ts)
 _RATING_TTL = 6 * 3600
 _SCHED_CACHE: Dict[str, object] = {"data": None, "ts": 0.0}
 _SCHED_TTL = 1800
+_BULLPEN_CACHE: Dict[str, object] = {"data": None, "ts": 0.0}
+_BULLPEN_TTL = 12 * 3600
 
 
-def _starter_multiplier(stat: Dict) -> Tuple[float, Dict]:
-    """Season pitching stat line -> (game-level run-suppression multiplier, display info)."""
+def _ra9(stat: Dict, ip_anchor: float) -> Tuple[Optional[float], Dict]:
+    """A pitcher's/staff's expected runs-allowed rate: FIP (defense-independent) blended
+    60/40 with ERA, regressed toward league average by innings pitched. Returns (ra9, info)."""
     try:
         ip = float(stat.get("inningsPitched") or 0)
         era = float(stat.get("era")) if stat.get("era") not in (None, "-.--", "") else LEAGUE_AVG_ERA
@@ -62,22 +66,63 @@ def _starter_multiplier(stat: Dict) -> Tuple[float, Dict]:
         bb = float(stat.get("baseOnBalls") or 0)
         k = float(stat.get("strikeOuts") or 0)
     except (TypeError, ValueError):
-        return 1.0, {"era": None, "fip": None, "ip": 0}
+        return None, {"era": None, "fip": None, "ip": 0}
     if ip < 1:
-        return 1.0, {"era": era, "fip": None, "ip": 0}
-
+        return None, {"era": era, "fip": None, "ip": 0}
     fip = (13 * hr + 3 * bb - 2 * k) / ip + FIP_CONSTANT
-    talent = 0.6 * fip + 0.4 * era                     # forward-looking skill estimate
-    reliability = ip / (ip + IP_ANCHOR)                # small samples -> pull to league avg
+    talent = 0.6 * fip + 0.4 * era
+    reliability = ip / (ip + ip_anchor)
     ra9 = reliability * talent + (1 - reliability) * LEAGUE_AVG_ERA
-    starter_mult = min(max(ra9 / LEAGUE_AVG_ERA, 0.55), 1.60)
-    # Blend with a league-average bullpen for the innings the starter won't throw.
-    game_mult = SP_SHARE * starter_mult + (1 - SP_SHARE) * 1.0
-    game_mult = round(min(max(game_mult, 0.78), 1.22), 3)
-    return game_mult, {"era": round(era, 2), "fip": round(fip, 2), "ip": ip}
+    return ra9, {"era": round(era, 2), "fip": round(fip, 2), "ip": ip}
 
 
-async def _pitcher_rating(client: httpx.AsyncClient, pid: int, season: int) -> Tuple[float, Dict]:
+# ---------------- per-team bullpen ratings ----------------
+
+async def bullpen_index() -> Dict[str, float]:
+    """{team_name: bullpen_multiplier} from each team's RELIEVER-only season stats, centered
+    on the actual league-average bullpen (so an average pen = 1.0). Tighter clamp than
+    starters — bullpens vary less game-to-game. Falls back to all-1.0 on any failure."""
+    cache = _BULLPEN_CACHE
+    if cache["data"] is not None and time.time() - float(cache["ts"]) < _BULLPEN_TTL:
+        return cache["data"]  # type: ignore[return-value]
+    season = datetime.now(_ET).year
+    out: Dict[str, float] = {}
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            tr = await client.get(f"{STATS_BASE}/teams", params={"sportId": 1, "season": season})
+            tr.raise_for_status()
+            teams = [(t["id"], t["name"]) for t in tr.json().get("teams", [])]
+
+            async def _team_ra9(tid):
+                try:
+                    r = await client.get(f"{STATS_BASE}/teams/{tid}/stats",
+                                         params={"stats": "statSplits", "group": "pitching",
+                                                 "sitCodes": "rp", "season": season})
+                    r.raise_for_status()
+                    splits = (r.json().get("stats") or [{}])[0].get("splits") or []
+                    if splits:
+                        ra9, _ = _ra9(splits[0]["stat"], ip_anchor=40.0)
+                        return ra9
+                except Exception:
+                    pass
+                return None
+
+            ra9s = await asyncio.gather(*[_team_ra9(tid) for tid, _ in teams])
+        valid = [x for x in ra9s if x]
+        league_bp = sum(valid) / len(valid) if valid else LEAGUE_AVG_ERA
+        for (tid, name), ra9 in zip(teams, ra9s):
+            mult = (ra9 / league_bp) if ra9 else 1.0
+            out[name] = round(min(max(mult, 0.85), 1.15), 3)
+    except Exception as exc:
+        print(f"[mlb_pitchers] bullpen fetch failed: {exc}")
+    cache["data"], cache["ts"] = out, time.time()
+    return out
+
+
+# ---------------- starters + game multiplier ----------------
+
+async def _starter_talent(client: httpx.AsyncClient, pid: int, season: int) -> Tuple[float, Dict]:
+    """Starter's individual run-suppression talent (before the bullpen blend)."""
     hit = _RATING_CACHE.get(pid)
     if hit and time.time() - hit[2] < _RATING_TTL:
         return hit[0], hit[1]
@@ -88,21 +133,26 @@ async def _pitcher_rating(client: httpx.AsyncClient, pid: int, season: int) -> T
         person = r.json()["people"][0]
         name = person.get("fullName")
         splits = (person.get("stats") or [{}])[0].get("splits") or []
-        if splits:
-            mult, info = _starter_multiplier(splits[0]["stat"])
-        else:
-            mult, info = 1.0, {"era": None, "fip": None, "ip": 0}   # no season stats yet
+        ra9, info = _ra9(splits[0]["stat"], ip_anchor=IP_ANCHOR) if splits else (None, {"era": None, "fip": None, "ip": 0})
+        talent = min(max(ra9 / LEAGUE_AVG_ERA, 0.55), 1.60) if ra9 else 1.0
         info["name"] = name
-        _RATING_CACHE[pid] = (mult, info, time.time())
-        return mult, info
+        _RATING_CACHE[pid] = (talent, info, time.time())
+        return talent, info
     except Exception as exc:
         print(f"[mlb_pitchers] rating fetch failed for {pid}: {exc}")
         return 1.0, {"name": None, "era": None, "fip": None, "ip": 0}
 
 
+def _game_mult(starter_talent: float, bullpen_mult: float) -> float:
+    """A team's full pitching multiplier = its announced starter (~62% of the game) blended
+    with its real bullpen (the rest). Applied to the OPPONENT's expected runs."""
+    return round(min(max(SP_SHARE * starter_talent + (1 - SP_SHARE) * bullpen_mult, 0.75), 1.25), 3)
+
+
 async def starters_index() -> Dict[Tuple[str, str], Dict]:
-    """{(home_team, away_team): {home:{...}, away:{...}}} for games around today (ET),
-    each side = {name, mult, era, fip, label} or None when no starter is announced yet."""
+    """{(home_team, away_team): {home:{...}, away:{...}}} for games around today (ET). Each
+    side = {name, mult, era, fip, label, bullpen} — mult is the full starter+bullpen game
+    multiplier — or None when no starter is announced yet."""
     cache = _SCHED_CACHE
     if cache["data"] is not None and time.time() - float(cache["ts"]) < _SCHED_TTL:
         return cache["data"]  # type: ignore[return-value]
@@ -111,6 +161,7 @@ async def starters_index() -> Dict[Tuple[str, str], Dict]:
     start = (today_et - timedelta(days=1)).isoformat()
     end = (today_et + timedelta(days=2)).isoformat()
     season = today_et.year
+    bullpens = await bullpen_index()
     index: Dict[Tuple[str, str], Dict] = {}
     try:
         async with httpx.AsyncClient(timeout=25) as client:
@@ -120,16 +171,18 @@ async def starters_index() -> Dict[Tuple[str, str], Dict]:
             r.raise_for_status()
             games = [g for d in r.json().get("dates", []) for g in d.get("games", [])]
 
-            # Collect probable-pitcher ids, rate each once (cached across games).
             async def _side(team_side):
+                team = team_side["team"]["name"]
+                bp = bullpens.get(team, 1.0)
                 pp = team_side.get("probablePitcher") or {}
                 pid = pp.get("id")
                 if not pid:
                     return None
-                mult, info = await _pitcher_rating(client, pid, season)
+                talent, info = await _starter_talent(client, pid, season)
+                mult = _game_mult(talent, bp)
                 return {"name": info.get("name") or pp.get("fullName"), "mult": mult,
                         "era": info.get("era"), "fip": info.get("fip"),
-                        "label": quality_label(mult)}
+                        "bullpen": bp, "label": quality_label(mult)}
 
             for g in games:
                 home = g["teams"]["home"]["team"]["name"]
