@@ -69,6 +69,8 @@ def log_bet(user: str, combo: Dict, stake: float = 0.0, book: str = "") -> Dict:
         "id": uuid.uuid4().hex[:10],
         "created_at": time.time(),
         "book": book,
+        # Which sport this bet belongs to, so the live monitor picks the right model.
+        "sport": combo.get("sport", "soccer"),
         # Store the full structured legs so we can recompute them live for cash-out.
         "legs": combo.get("legs", []),
         "leg_count": combo.get("leg_count"),

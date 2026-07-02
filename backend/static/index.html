@@ -6,7 +6,7 @@
   <title>Alpha Markets AI</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=10" />
+  <link rel="stylesheet" href="/static/styles.css?v=11" />
 </head>
 <body>
   <div id="loginGate" class="login-gate">
@@ -28,8 +28,12 @@
       <div class="logo">α</div>
       <div>
         <h1>Alpha Markets AI</h1>
-        <p class="tagline">Edge detection &amp; risk-sized calls — World Cup beta</p>
+        <p class="tagline" id="tagline">Edge detection &amp; risk-sized calls — World Cup beta</p>
       </div>
+    </div>
+    <div class="sport-switch" id="sportSwitch">
+      <button class="sportbtn active" data-sport="soccer">⚽ World Cup</button>
+      <button class="sportbtn" data-sport="mlb">⚾ MLB</button>
     </div>
     <div class="status">
       <span id="modelBadge" class="badge" title="Trained model accuracy">model: —</span>
@@ -262,6 +266,6 @@
     Alpha Markets AI surfaces mathematical edge (vig-removal, expected value, Kelly sizing). It does not predict the future and cannot guarantee outcomes. Bet only what you can afford to lose. For 18+/21+ where legal.
   </footer>
 
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

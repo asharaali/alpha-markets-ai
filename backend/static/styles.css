@@ -61,6 +61,13 @@ body {
 }
 .topbar h1 { font-size: 19px; font-weight: 800; letter-spacing: -0.3px; }
 .tagline { font-size: 12px; color: var(--muted); }
+.sport-switch { display: flex; gap: 4px; background: var(--card, #131a2a); border: 1px solid var(--border); border-radius: 11px; padding: 4px; }
+.sportbtn {
+  border: none; background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 13px; font-weight: 700; padding: 7px 14px; border-radius: 8px; transition: all .12s;
+}
+.sportbtn:hover { color: var(--text, #e7ecf5); }
+.sportbtn.active { background: linear-gradient(135deg, var(--blue), #7b5cff); color: #fff; }
 .status { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
 .live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
 .live-dot.on { background: var(--green); box-shadow: 0 0 0 4px #1ec98b22; animation: pulse 1.6s infinite; }

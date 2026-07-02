@@ -17,8 +17,9 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app import auth
+from app import sports
 from app.data_sources.odds_api import (get_soccer_matches, get_live_scores, merge_scores,
-                                       QUOTA, LIVE_STATUS)
+                                       get_matches, get_scores, QUOTA, LIVE_STATUS)
 from app.data_sources.kalshi import get_kalshi_wc_games
 from app.data_sources.kalshi_markets import get_weather_markets, CITIES
 from app.weather_analysis import analyze_weather
@@ -127,6 +128,7 @@ class ComboLeg(BaseModel):
 class ComboRequest(BaseModel):
     legs: List[ComboLeg]
     bankroll: Optional[float] = None
+    sport: Optional[str] = None
 
 
 class LogBetRequest(BaseModel):
@@ -155,6 +157,7 @@ class AutoParlayRequest(BaseModel):
     games: List[dict]            # [{"home": "...", "away": "..."}]
     style: str = "moderate safe" # safe | moderate safe | slight risk | medium risk | risky | optimize
     legs: Optional[int] = None   # None => tier decides leg count
+    sport: Optional[str] = None
 
 
 class ManualBetRequest(BaseModel):
@@ -196,20 +199,28 @@ def health():
     }
 
 
-@app.get("/api/matches")
-async def matches(bankroll: Optional[float] = None):
-    raw = await get_soccer_matches()
-    # Fold in live/final scores so in-play games use the live model.
-    scores = await get_live_scores()
-    any_live = merge_scores(raw, scores) if scores else False
+@app.get("/api/sports")
+def sports_list():
+    """The sports this engine covers (for the frontend sport switch)."""
+    return {"sports": sports.all_sports(), "default": sports.DEFAULT_SPORT}
 
-    analyzed = [analyze_match(m, bankroll) for m in raw]
-    # Live games first, then soonest kickoff first (so today's slate is at the top).
+
+@app.get("/api/matches")
+async def matches(bankroll: Optional[float] = None, sport: Optional[str] = None):
+    sport = sports.normalize(sport)
+    raw = await get_matches(sport)
+    # Fold in live/final scores so in-play games use the live model.
+    scores = await get_scores(sport)
+    any_live = merge_scores(raw, scores, sport) if scores else False
+
+    analyzed = [analyze_match(m, bankroll, sport) for m in raw]
+    # Live games first, then soonest start first (so today's slate is at the top).
     analyzed.sort(key=lambda m: (m["status"] != "live", m["commence_time"]))
 
     poll_seconds = settings.LIVE_POLL_SECONDS if any_live else settings.IDLE_POLL_SECONDS
     return {
         "count": len(analyzed),
+        "sport": sport,
         "demo_mode": settings.DEMO_MODE,
         "data_live": LIVE_STATUS["live"],
         "data_reason": LIVE_STATUS["reason"],
@@ -221,43 +232,54 @@ async def matches(bankroll: Optional[float] = None):
 
 
 @app.get("/api/model")
-def model(team_a: str, team_b: str):
-    return match_probabilities(team_a, team_b)
+def model(team_a: str, team_b: str, sport: Optional[str] = None):
+    M = sports.model(sport)
+    return M.match_probabilities(team_a, team_b)
 
 
 @app.get("/api/markets")
-def markets_endpoint(team_a: str, team_b: str):
-    """All bet types the model can price for a matchup (goals, scores, player props…)."""
-    return extended_markets(team_a, team_b)
+def markets_endpoint(team_a: str, team_b: str, sport: Optional[str] = None):
+    """All bet types the model can price for a matchup (sport-appropriate)."""
+    return sports.model(sport).extended_markets(team_a, team_b)
 
 
 @app.get("/api/model-info")
-def model_info():
+def model_info(sport: Optional[str] = None):
     """Training provenance + measured out-of-sample accuracy/calibration."""
-    return MODEL_INFO
+    return sports.model(sport).MODEL_INFO
 
 
 @app.get("/api/kalshi")
-async def kalshi():
+async def kalshi(sport: Optional[str] = None):
+    if sports.normalize(sport) == "mlb":
+        # MLB game-line board = the KXMLBGAME moneyline singles, grouped for a card view.
+        from app.data_sources.kalshi_mlb import get_single_bets
+        board = await get_matches("mlb")
+        bets = [b for b in await get_single_bets(board) if b["bet_type"] == "Moneyline"]
+        return {"count": len(bets), "tradeable": len(bets), "sport": "mlb", "singles": bets}
     games = await get_kalshi_wc_games()
     tradeable = sum(1 for g in games if g.get("tradeable"))
-    return {"count": len(games), "tradeable": tradeable, "games": games}
+    return {"count": len(games), "tradeable": tradeable, "sport": "soccer", "games": games}
 
 
 @app.get("/api/kalshi/singles")
-async def kalshi_singles(category: Optional[str] = None):
+async def kalshi_singles(category: Optional[str] = None, sport: Optional[str] = None):
     """
-    Every INDIVIDUAL Kalshi World Cup bet (moneyline, spread, totals, BTTS, corners,
-    correct score, player goalscorer, to-advance), each with the model's fair value AND a
-    multi-bookmaker consensus cross-check so you can see how good each bet really is.
+    Every INDIVIDUAL Kalshi bet, each with the model's fair value AND (where the books cover
+    the market) a multi-bookmaker consensus cross-check. Soccer: moneyline, spread, totals,
+    BTTS, corners, correct score, goalscorer, to-advance. MLB: moneyline + total runs.
     """
-    from app.data_sources.kalshi_single import get_single_bets, SERIES
-    board = await get_soccer_matches()
+    if sports.normalize(sport) == "mlb":
+        from app.data_sources.kalshi_mlb import get_single_bets, SERIES
+        board = await get_matches("mlb")
+    else:
+        from app.data_sources.kalshi_single import get_single_bets, SERIES
+        board = await get_soccer_matches()
     bets = await get_single_bets(board)
     if category:
         bets = [b for b in bets if b["category"].lower() == category.lower()]
     cats = sorted({s[0] for s in SERIES.values()})
-    return {"count": len(bets), "categories": cats,
+    return {"count": len(bets), "categories": cats, "sport": sports.normalize(sport),
             "value_count": sum(b["value_bet"] for b in bets), "bets": bets}
 
 
@@ -291,25 +313,27 @@ async def weather_calib():
 @app.post("/api/combo")
 def combo(req: ComboRequest, request: Request):
     legs = [leg.model_dump() for leg in req.legs]
-    return evaluate_combo(legs, req.bankroll, user=request.state.user)
+    return evaluate_combo(legs, req.bankroll, user=request.state.user,
+                          sport=sports.normalize(req.sport))
 
 
 @app.post("/api/parlay/auto")
 async def parlay_auto(req: AutoParlayRequest, request: Request):
     """Auto-build a parlay: 5 risk tiers, or 'optimize' for the best money+safety balance."""
+    sport = sports.normalize(req.sport)
     # Parlays can run 2–8 legs (default 3). Clamp whatever the UI sends.
     legs = max(2, min(int(req.legs or 3), 8))
     if req.style.lower().strip() in ("optimize", "best"):
-        raw = await get_soccer_matches()
-        scores = await get_live_scores()
+        raw = await get_matches(sport)
+        scores = await get_scores(sport)
         if scores:
-            merge_scores(raw, scores)
+            merge_scores(raw, scores, sport)
         names = {(g["home"], g["away"]) for g in req.games}
-        subset = [analyze_match(m) for m in raw if (m["home"], m["away"]) in names]
+        subset = [analyze_match(m, sport=sport) for m in raw if (m["home"], m["away"]) in names]
         # Skip parlays already on your slip so each request surfaces a fresh one.
         placed = {_legset(b.get("legs", [])) for b in bet_log.pending_bets(request.state.user)}
-        return build_optimal_parlay(subset, legs, exclude=placed)
-    return build_auto_parlay(req.games, req.style, legs)
+        return build_optimal_parlay(subset, legs, exclude=placed, sport=sport)
+    return build_auto_parlay(req.games, req.style, legs, sport=sport)
 
 
 @app.post("/api/combo/log")
@@ -476,22 +500,25 @@ def bets(request: Request):
 
 
 @app.get("/api/tips/next")
-async def tips_next(request: Request):
+async def tips_next(request: Request, sport: Optional[str] = None):
     """Bounce-back tips: the strongest fresh +EV plays to bet next (used after a miss)."""
-    raw = await get_soccer_matches()
-    scores = await get_live_scores()
+    sport = sports.normalize(sport)
+    raw = await get_matches(sport)
+    scores = await get_scores(sport)
     if scores:
-        merge_scores(raw, scores)
-    analyzed = [analyze_match(m) for m in raw]
+        merge_scores(raw, scores, sport)
+    analyzed = [analyze_match(m, sport=sport) for m in raw]
     placed = {(b["home"], b["away"], b["selection"]) for b in autobet.today_bets(request.state.user)}
     return {"tips": next_best_tips(analyzed, exclude_selections=placed, n=3)}
 
 
 @app.get("/api/bets/live")
 async def bets_live(request: Request):
-    """Live cash-out monitor: which pending parlays are going wrong right now."""
-    scores = await get_live_scores()
-    statuses = monitor_live_bets(scores or [], request.state.user)
+    """Live cash-out monitor across ALL sports: which pending parlays are going wrong now."""
+    statuses = []
+    for sp in (s["key"] for s in sports.all_sports()):
+        scores = await get_scores(sp)
+        statuses += monitor_live_bets(scores or [], request.state.user, sport=sp)
     return {"any_live": any(s["any_live"] for s in statuses), "bets": statuses}
 
 
@@ -692,30 +719,38 @@ async def _notify_loop():
         _loop_beat["ts"] = _t.time()
         _loop_beat["iterations"] += 1
         try:
-            # Only fetch scores once, then check every user's bets against them.
+            # Fetch each sport's scores once, then check every user's bets against them.
             users_with_bets = [u for u in auth.all_usernames() if bet_log.pending_bets(u)]
             if users_with_bets:
-                scores = await get_live_scores()
+                all_sports = [s["key"] for s in sports.all_sports()]
+                scores_by_sport = {sp: (await get_scores(sp)) for sp in all_sports}
                 any_live = False
                 for username in users_with_bets:
                     topic = (auth.get_user(username) or {}).get("ntfy_topic")
                     # Reconcile any combos you cashed out yourself on Kalshi before tracking.
                     await _sync_manual_cashouts(username, topic)
                     bets_by_id = {b["id"]: b for b in bet_log.pending_bets(username)}
-                    for s in monitor_live_bets(scores or [], username):
+                    statuses = []
+                    for sp in all_sports:
+                        statuses += monitor_live_bets(scores_by_sport.get(sp) or [], username, sport=sp)
+                    for s in statuses:
                         if s["any_live"]:
                             any_live = True
+                        is_mlb = s.get("sport") == "mlb"
 
-                        # --- GOAL alerts: ping the moment a tracked game's score changes ---
+                        # --- SCORE alerts: ping the moment a tracked game's score changes ---
                         for gv in s.get("live_games", []):
                             gkey = (gv["home"], gv["away"])
                             sig = (gv["sa"], gv["sb"])
                             prev = _score_state.get(gkey)
                             if prev is not None and sig != prev:
                                 scorer = (gv["home"] if sig[0] > prev[0] else gv["away"])
-                                send_push(f"GOAL — {scorer} scored! {gv['home']} {sig[0]}-{sig[1]} {gv['away']} "
-                                          f"({gv['minute']}'). Watching your parlay.",
-                                          title="⚽ GOAL", tags=["soccer"], topic=topic)
+                                clock = f"{gv['minute']}{'th' if is_mlb else chr(39)}"
+                                word = "RUN" if is_mlb else "GOAL"
+                                send_push(f"{word} — {scorer} scored! {gv['home']} {sig[0]}-{sig[1]} {gv['away']} "
+                                          f"({clock}). Watching your parlay.",
+                                          title=f"{'⚾' if is_mlb else '⚽'} {word}",
+                                          tags=["baseball" if is_mlb else "soccer"], topic=topic)
                             _score_state[gkey] = sig
 
                         # "sliding" = lost a real chunk of its value but not yet collapsed —

@@ -21,6 +21,8 @@ class Settings:
 
     # The Odds API sport key for the current World Cup.
     SOCCER_SPORT_KEY: str = os.getenv("SOCCER_SPORT_KEY", "soccer_fifa_world_cup")
+    # The Odds API sport key for MLB regular season.
+    MLB_SPORT_KEY: str = os.getenv("MLB_SPORT_KEY", "baseball_mlb")
     ODDS_API_BASE: str = "https://api.the-odds-api.com/v4"
     # Each region costs 1 quota credit per odds call. Keep it to one region to conserve.
     ODDS_REGIONS: str = os.getenv("ODDS_REGIONS", "us")

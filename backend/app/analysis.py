@@ -4,37 +4,50 @@ The brain that turns 'model probabilities + live odds' into actionable, honest c
   - Safe / Mid / Risky tiering (by hit-probability, only surfacing +EV bets)
   - combo (parlay) evaluation
   - cash-out / hedge decisions when the live picture changes
+
+Sport-aware: every model call dispatches through app.sports, so the same logic serves
+soccer (World Cup) and MLB. Soccer is the default when no sport is given, so existing
+behaviour and URLs are unchanged.
 """
 from __future__ import annotations
 from typing import Dict, List, Optional
+import re
 
 from app import probability as P
+from app import sports
 from app.config import settings
-import re
-from app.soccer_model import (match_probabilities, live_match_probabilities,
-                              live_leg_probability, extended_markets)
 
-# Markets Kalshi lists for a World Cup parlay.
-_KALSHI_RE = re.compile(r"match result|winning margin|spread|total goals|both teams|goalscorer|corners", re.I)
-# In the knockout rounds the parlay is built ONLY from these clean markets: which team
-# wins, a player to score, and total corners (8+ minimum). Tight, low-event games make the
-# fancier goal-line / BTTS / margin legs unreliable, so we leave them out of knockout combos.
+# Knockout soccer uses a tighter set of clean markets for parlay legs.
 _KNOCKOUT_RE = re.compile(r"match result|goalscorer|corners", re.I)
 
 
-def _candidate_legs(home: str, away: str, stage: Optional[Dict] = None) -> List[Dict]:
-    legs = []
+def _stage_for(sport: str) -> Optional[Dict]:
+    """Tournament stage only applies to soccer; MLB has no bracket."""
+    if sports.normalize(sport) == "soccer":
+        from app.tournament import current_stage
+        return current_stage()
+    return None
+
+
+def _candidate_legs(home: str, away: str, sport: str = "soccer",
+                    stage: Optional[Dict] = None) -> List[Dict]:
+    M = sports.model(sport)
+    cfg = sports.config(sport)
     knockout = bool(stage and stage.get("is_knockout"))
-    gate = _KNOCKOUT_RE if knockout else _KALSHI_RE
-    for cat, sels in extended_markets(home, away, stage)["markets"].items():
+    gate = _KNOCKOUT_RE if knockout else re.compile(cfg["parlay_markets"], re.I)
+    em = (M.extended_markets(home, away, stage=stage) if sports.normalize(sport) == "soccer"
+          else M.extended_markets(home, away))
+    legs = []
+    for cat, sels in em["markets"].items():
         if not gate.search(cat):
             continue
         mtype = "goalscorer" if "goalscorer" in cat.lower() else cat
         for s in sels:
-            # In a knockout a 90-minute Draw just sends the tie to extra time / penalties —
-            # someone still advances — so it's a confusing, trap-prone standalone parlay leg.
-            # Skip it in knockout rounds and lean on cleaner markets instead.
+            # A 90-min Draw in a soccer knockout is a trap leg (someone still advances) — skip it.
             if knockout and "match result" in cat.lower() and s["label"] == "Draw":
+                continue
+            # F5 'Tie' and any explicit tie/draw is a confusing standalone parlay leg — skip.
+            if s["label"].lower().startswith("tie"):
                 continue
             legs.append({
                 "home": home, "away": away, "market": cat, "mtype": mtype,
@@ -44,8 +57,7 @@ def _candidate_legs(home: str, away: str, stage: Optional[Dict] = None) -> List[
     return legs
 
 
-# 5 risk tiers -> (TARGET per-leg probability, number of legs). Each leg is chosen near
-# this probability, so the tiers grade smoothly from near-locks to longshots.
+# 5 risk tiers -> (TARGET per-leg probability, number of legs).
 RISK_TIERS = {
     "safe":          (0.88, 3),
     "moderate safe": (0.78, 3),
@@ -55,33 +67,23 @@ RISK_TIERS = {
 }
 
 
-def _resolve_tier(style: str, stage: Dict) -> tuple[float, int]:
-    """
-    Tier target + leg count, adjusted for the tournament stage. In knockout rounds one
-    goal (or a shootout) decides everything, so we lean on higher-probability legs and
-    stack fewer of them — every extra leg is a bigger coin-flip than it was in the groups.
-    """
+def _resolve_tier(style: str, stage: Optional[Dict]) -> tuple[float, int]:
+    """Tier target + leg count, adjusted for a soccer knockout stage (safer, fewer legs)."""
     target, n = RISK_TIERS.get(style, RISK_TIERS["moderate safe"])
-    if stage.get("is_knockout"):
+    if stage and stage.get("is_knockout"):
         depth = stage.get("depth", 1)
-        target = min(0.93, target + 0.03 + 0.01 * depth)  # demand safer legs
+        target = min(0.93, target + 0.03 + 0.01 * depth)
         if n >= 4:
-            n -= 1                                          # don't stack longshots
+            n -= 1
     return target, n
 
 
 def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs: Optional[int] = None,
-                      bankroll: Optional[float] = None) -> Dict:
-    """
-    Auto-build a parlay across ALL Kalshi market types (who wins, margin, totals, BTTS,
-    player props) at the chosen risk tier. One leg per (game, market type) so it's varied.
-    Each leg is picked near the tier's target probability => smooth grading across tiers.
-
-    Stage-aware: in knockout rounds the legs are pulled from the tighter knockout model,
-    Draw legs are dropped, and the tier leans safer (see _resolve_tier).
-    """
-    from app.tournament import current_stage
-    stage = current_stage()
+                      bankroll: Optional[float] = None, sport: str = "soccer") -> Dict:
+    """Auto-build a parlay across the sport's parlay-eligible markets at the chosen risk tier.
+    One leg per (game, market type) so it's varied. Each leg is picked near the tier's target
+    probability => smooth grading across tiers. Soccer is stage-aware; MLB is not."""
+    stage = _stage_for(sport)
     style = style.lower().strip()
     target, n = _resolve_tier(style, stage)
     if max_legs:
@@ -89,11 +91,10 @@ def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs:
 
     cands = []
     for g in games:
-        cands += _candidate_legs(g["home"], g["away"], stage)
+        cands += _candidate_legs(g["home"], g["away"], sport, stage)
     if not cands:
         return {"error": "no games/markets found for that day"}
 
-    # Closest to the tier's target probability first => distinct legs per risk level.
     cands.sort(key=lambda c: abs(c["model_prob"] - target))
     picked, used = [], set()
     for c in cands:
@@ -107,10 +108,11 @@ def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs:
 
     if not picked:
         return {"error": f"no legs found for '{style}' that day"}
-    res = evaluate_combo(picked, bankroll)
+    res = evaluate_combo(picked, bankroll, sport=sport)
     res["style"] = style
-    res["stage"] = stage["stage"]
-    res["stage_label"] = stage["label"]
+    if stage:
+        res["stage"] = stage["stage"]
+        res["stage_label"] = stage["label"]
     return res
 
 
@@ -121,25 +123,19 @@ def _legset(combo) -> frozenset:
 
 def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
                          bankroll: Optional[float] = None,
-                         exclude: Optional[set] = None) -> Dict:
-    """
-    The '⭐ Best Parlay' optimizer. Maximises money AND safety by building ONLY from legs
-    where the model genuinely beats the book (real +EV value bets, match-result market),
-    then picking the combination with the best balance of edge and hit-probability.
-
-    `exclude` is a set of leg-sets (see _legset) already placed/shown — those are skipped so
-    repeat requests surface FRESH parlays instead of the same one. Up to 3 next-best
-    alternatives ride along under "alternatives".
-    Honest fallback: if there's no +EV edge, it says so and offers the single best value bet.
-    """
+                         exclude: Optional[set] = None, sport: str = "soccer") -> Dict:
+    """The '⭐ Best Parlay' optimizer. Builds ONLY from legs where the model genuinely beats
+    the book (real +EV value bets on the primary win market), then picks the combination with
+    the best balance of edge and hit-probability."""
     import itertools
     exclude = exclude or set()
+    win_market = "Moneyline" if sports.normalize(sport) == "mlb" else "Match Result"
     value_legs = []
     for m in matches:
         for s in m.get("suggestions", []):
-            if s["market"] == "Match Result" and s.get("value_bet"):
+            if s["market"] == win_market and s.get("value_bet"):
                 value_legs.append({
-                    "home": m["home"], "away": m["away"], "market": "Match Result",
+                    "home": m["home"], "away": m["away"], "market": win_market,
                     "selection": s["selection"], "label": f"{m['home']} v {m['away']}: {s['selection']}",
                     "model_prob": s["model_prob"], "market_odds_decimal": s["market_odds_decimal"],
                     "ev": s["ev_per_dollar"],
@@ -147,19 +143,17 @@ def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
     if not value_legs:
         return {"optimize": True, "error": "No +EV edge on this day's board — the honest move is no bet."}
 
-    # Bound the search: combinations up to 8 legs explode if there are many value legs,
-    # so keep only the strongest candidates by EV before the combinatorial pass.
     value_legs.sort(key=lambda l: l["ev"], reverse=True)
     value_legs = value_legs[:14]
 
-    # Rank every valid +EV combo by money*safety. One leg per game (independent events).
     ranked = []
     for r in range(1, min(max_legs, len(value_legs)) + 1):
         for combo in itertools.combinations(value_legs, r):
             if len({(l["home"], l["away"]) for l in combo}) != r:
-                continue  # different games only
+                continue
             res = evaluate_combo([{k: l[k] for k in ("label", "model_prob", "market_odds_decimal",
-                                  "home", "away", "market", "selection")} for l in combo], bankroll)
+                                  "home", "away", "market", "selection")} for l in combo],
+                                 bankroll, sport=sport)
             if res["ev_per_dollar"] <= 0:
                 continue
             score = res["ev_per_dollar"] * (res["combined_model_prob"] ** 0.5)
@@ -170,32 +164,28 @@ def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
     ranked.sort(key=lambda x: x[0], reverse=True)
     fresh = [r for r in ranked if r[1] not in exclude]
     if not fresh:
-        # Everything good is already on your slip — say so, still show the strongest.
         res = ranked[0][2]
         res["optimize"] = True
         res["all_placed"] = True
         res["note"] = "You've already got every +EV parlay on this board. This is the strongest one again."
         return res
 
-    from app.tournament import current_stage
     res = dict(fresh[0][2])
     res["optimize"] = True
-    res["stage_label"] = current_stage()["label"]
-    res["alternatives"] = [r[2] for r in fresh[1:4]]  # next-best fresh parlays for variety
+    stage = _stage_for(sport)
+    if stage:
+        res["stage_label"] = stage["label"]
+    res["alternatives"] = [r[2] for r in fresh[1:4]]
     return res
 
 
 def next_best_tips(matches: List[Dict], exclude_selections: Optional[set] = None,
                    n: int = 3) -> List[Dict]:
-    """
-    'Bounce back' tips: the strongest fresh +EV plays to put down next — used after a
-    parlay misses so there's always a smart next move, never a dead end.
-    `exclude_selections` is a set of (home, away, selection) already placed today.
-    """
+    """'Bounce back' tips: the strongest fresh +EV plays to put down next."""
     exclude_selections = exclude_selections or set()
     tips = []
     for m in matches:
-        if m.get("status") != "upcoming":     # next plays are pre-match only
+        if m.get("status") != "upcoming":
             continue
         for s in m.get("suggestions", []):
             if not s.get("value_bet"):
@@ -216,19 +206,15 @@ def next_best_tips(matches: List[Dict], exclude_selections: Optional[set] = None
 
 # Minimum edge (fair prob - market prob) before we call something a "value bet".
 MIN_EDGE = 0.03
-
-# A sharp market is information. We don't take the raw model at face value — we shrink it
-# toward the vig-free market price. MODEL_WEIGHT is how much we trust our model vs the market.
-# 0.40 = "the market is a stronger prior than our model" (correct against sharp books).
+# We shrink the model toward the vig-free market price. MODEL_WEIGHT = how much we trust
+# our model vs the (sharp) market. 0.40 = the market is a stronger prior than our model.
 MODEL_WEIGHT = 0.40
-
-# Guardrails against the classic longshot trap (tiny model errors at long odds -> fake huge EV).
-LONGSHOT_FLOOR = 0.12   # don't flag value on sides the market itself rates below this.
-HEAVY_FAV_CAP = 0.82    # don't claim to beat a sharp market on a heavy favorite.
+# Guardrails against the classic longshot trap.
+LONGSHOT_FLOOR = 0.12
+HEAVY_FAV_CAP = 0.82
 
 
 def _tier(prob: float) -> str:
-    """Risk tier is about how likely the bet is to LAND, not how juicy the payout is."""
     if prob >= 0.60:
         return "safe"
     if prob >= 0.38:
@@ -239,24 +225,19 @@ def _tier(prob: float) -> str:
 def _build_suggestion(label: str, selection: str, model_prob: float,
                       market_odds: float, market_prob_vigfree: float,
                       bankroll: float) -> Dict:
-    # Shrink the model toward the market — this is what stops the model running wild on
-    # blowouts and inventing edge the sharps would never leave on the table.
     fair = MODEL_WEIGHT * model_prob + (1 - MODEL_WEIGHT) * market_prob_vigfree
     ev = P.expected_value(fair, market_odds)
     ed = P.edge(fair, market_prob_vigfree)
     stake = P.recommended_stake(fair, market_odds, bankroll, settings.KELLY_FRACTION)
-
     value_bet = (
-        ed >= MIN_EDGE
-        and ev > 0
-        and market_prob_vigfree >= LONGSHOT_FLOOR   # not a longshot trap
-        and market_prob_vigfree <= HEAVY_FAV_CAP    # not fighting a sharp price on a megafav
+        ed >= MIN_EDGE and ev > 0
+        and market_prob_vigfree >= LONGSHOT_FLOOR
+        and market_prob_vigfree <= HEAVY_FAV_CAP
     )
     return {
-        "market": label,
-        "selection": selection,
-        "model_prob": round(model_prob, 4),     # raw model, shown for transparency
-        "fair_prob": round(fair, 4),            # market-shrunk estimate we actually bet on
+        "market": label, "selection": selection,
+        "model_prob": round(model_prob, 4),
+        "fair_prob": round(fair, 4),
         "market_prob": round(market_prob_vigfree, 4),
         "market_odds_decimal": market_odds,
         "market_odds_american": P.decimal_to_american(market_odds),
@@ -268,91 +249,120 @@ def _build_suggestion(label: str, selection: str, model_prob: float,
     }
 
 
-def analyze_match(match: Dict, bankroll: Optional[float] = None) -> Dict:
-    """Attach model output + ranked value suggestions to a normalized match dict."""
-    bankroll = bankroll or settings.DEFAULT_BANKROLL
+def _analyze_soccer(match: Dict, model: Dict, suggestions: List[Dict], bankroll: float) -> None:
     home, away = match["home"], match["away"]
-
-    # If the game is in play, use the in-play model (current score + time left) — this is
-    # what drives a live win-probability and an accurate cash-out call.
-    is_live = match.get("status") == "live" and match.get("live_score") is not None
-    if is_live:
-        sc = match["live_score"]
-        model = live_match_probabilities(home, away, sc["home"], sc["away"],
-                                         match.get("live_minute", 0))
-        pre = match_probabilities(home, away)
-        model["pregame_probs"] = pre["probs"]
-    else:
-        model = match_probabilities(home, away)
-    suggestions: List[Dict] = []
-
     markets = match.get("markets", {})
-
-    # --- Match result (1X2) ---
     h2h = markets.get("h2h") or {}
     if all(h2h.get(k) for k in ("home", "draw", "away")):
         vigfree = P.remove_vig([h2h["home"], h2h["draw"], h2h["away"]])
-        labels = [("home", home), ("draw", "Draw"), ("away", away)]
-        for (key, name), mp in zip(labels, vigfree):
-            suggestions.append(_build_suggestion(
-                "Match Result", name, model["probs"][key], h2h[key], mp, bankroll))
-
-    # --- Over/Under 2.5 goals ---
+        for (key, name), mp in zip([("home", home), ("draw", "Draw"), ("away", away)], vigfree):
+            suggestions.append(_build_suggestion("Match Result", name, model["probs"][key],
+                                                 h2h[key], mp, bankroll))
     tot = markets.get("totals_2_5") or {}
     if tot.get("over") and tot.get("under"):
         vigfree = P.remove_vig([tot["over"], tot["under"]])
         for (key, name, mkey), mp in zip(
                 [("over", "Over 2.5", "over_2_5"), ("under", "Under 2.5", "under_2_5")], vigfree):
-            suggestions.append(_build_suggestion(
-                "Total Goals", name, model["totals"][mkey], tot[key], mp, bankroll))
-
-    # --- Both teams to score ---
+            suggestions.append(_build_suggestion("Total Goals", name, model["totals"][mkey],
+                                                 tot[key], mp, bankroll))
     btts = markets.get("btts") or {}
     if btts.get("yes") and btts.get("no"):
         vigfree = P.remove_vig([btts["yes"], btts["no"]])
         for (key, name, mkey), mp in zip(
                 [("yes", "BTTS: Yes", "btts_yes"), ("no", "BTTS: No", "btts_no")], vigfree):
-            suggestions.append(_build_suggestion(
-                "Both Teams To Score", name, model["totals"][mkey], btts[key], mp, bankroll))
+            suggestions.append(_build_suggestion("Both Teams To Score", name, model["totals"][mkey],
+                                                 btts[key], mp, bankroll))
 
-    # Best value first.
+
+def _analyze_mlb(match: Dict, model: Dict, suggestions: List[Dict], bankroll: float) -> None:
+    home, away = match["home"], match["away"]
+    markets = match.get("markets", {})
+    # Moneyline (2-way, no draw).
+    h2h = markets.get("h2h") or {}
+    if h2h.get("home") and h2h.get("away"):
+        vigfree = P.remove_vig([h2h["home"], h2h["away"]])
+        for (key, name), mp in zip([("home", home), ("away", away)], vigfree):
+            suggestions.append(_build_suggestion("Moneyline", name, model["probs"][key],
+                                                 h2h[key], mp, bankroll))
+    # Total runs over/under (book odds present in demo; model-priced otherwise).
+    tot = markets.get("totals") or {}
+    if tot.get("over") and tot.get("under"):
+        line = tot.get("line", model["totals"].get("line"))
+        vigfree = P.remove_vig([tot["over"], tot["under"]])
+        for (key, mkey), mp in zip([("over", "over"), ("under", "under")], vigfree):
+            suggestions.append(_build_suggestion(f"Total Runs {line}", f"{key.title()} {line}",
+                                                 model["totals"][mkey], tot[key], mp, bankroll))
+    # Run line -1.5 / +1.5 (book odds present in demo).
+    rl = markets.get("runline") or {}
+    if rl.get("home") and rl.get("away"):
+        em = sports.model("mlb").extended_markets(home, away,
+                                                  match.get("sp_home", "avg"), match.get("sp_away", "avg"))
+        rlm = {s["label"]: s["prob"] for s in em["markets"]["Run Line"]}
+        vigfree = P.remove_vig([rl["home"], rl["away"]])
+        for (key, label), mp in zip([("home", f"{home} -1.5"), ("away", f"{away} +1.5")], vigfree):
+            suggestions.append(_build_suggestion("Run Line", label, rlm.get(label, 0.5),
+                                                 rl[key], mp, bankroll))
+
+
+def analyze_match(match: Dict, bankroll: Optional[float] = None, sport: Optional[str] = None) -> Dict:
+    """Attach model output + ranked value suggestions to a normalized match dict."""
+    bankroll = bankroll or settings.DEFAULT_BANKROLL
+    sport = sports.normalize(sport or match.get("sport"))
+    M = sports.model(sport)
+    home, away = match["home"], match["away"]
+
+    is_live = match.get("status") == "live" and match.get("live_score") is not None
+    if is_live:
+        sc = match["live_score"]
+        if sport == "mlb":
+            model = M.live_match_probabilities(home, away, sc["home"], sc["away"],
+                                               match.get("live_inning") or 1,
+                                               match.get("live_half") or "top",
+                                               match.get("sp_home", "avg"), match.get("sp_away", "avg"))
+            pre = M.match_probabilities(home, away, match.get("sp_home", "avg"), match.get("sp_away", "avg"))
+        else:
+            model = M.live_match_probabilities(home, away, sc["home"], sc["away"],
+                                               match.get("live_minute", 0))
+            pre = M.match_probabilities(home, away)
+        model["pregame_probs"] = pre["probs"]
+    else:
+        model = (M.match_probabilities(home, away, match.get("sp_home", "avg"),
+                                       match.get("sp_away", "avg")) if sport == "mlb"
+                 else M.match_probabilities(home, away))
+
+    suggestions: List[Dict] = []
+    if sport == "mlb":
+        _analyze_mlb(match, model, suggestions, bankroll)
+    else:
+        _analyze_soccer(match, model, suggestions, bankroll)
+
     suggestions.sort(key=lambda s: (s["value_bet"], s["ev_per_dollar"]), reverse=True)
     value_bets = [s for s in suggestions if s["value_bet"]]
-
     return {
-        **match,
-        "model": model,
-        "suggestions": suggestions,
+        **match, "sport": sport, "model": model, "suggestions": suggestions,
         "best_value": value_bets[0] if value_bets else None,
         "value_count": len(value_bets),
     }
 
 
-def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Optional[str] = None) -> Dict:
-    """
-    Evaluate a parlay/combo (e.g. a Kalshi multi-leg).
-    Each leg: {"model_prob": float, "market_odds_decimal": float, "label": str}
-    Assumes legs are independent (true for unrelated matches; correlated legs are riskier).
-    """
+def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Optional[str] = None,
+                   sport: str = "soccer") -> Dict:
+    """Evaluate a parlay/combo. Each leg: {model_prob, market_odds_decimal, label}. Assumes
+    legs are independent (true for unrelated games; correlated legs are riskier)."""
     bankroll = bankroll or settings.DEFAULT_BANKROLL
     if not legs:
         return {"error": "no legs provided"}
 
-    combined_prob = 1.0
-    combined_odds = 1.0
+    combined_prob = combined_odds = 1.0
     for leg in legs:
         combined_prob *= float(leg["model_prob"])
         combined_odds *= float(leg["market_odds_decimal"])
 
-    # Stage adjustment: knockout games are coin-flippier (a single goal or a shootout
-    # decides), so a clean independent-Poisson combined probability is too optimistic.
-    # Shrink it by the stage's combo factor (1.0 in the group stage, lower each round).
-    from app.tournament import current_stage
-    stage = current_stage()
-    combo_factor = stage.get("combo_factor", 1.0)
+    # Soccer knockouts are coin-flippier, so shrink the independent-Poisson combined prob by
+    # the stage's combo factor. MLB has no stage => factor 1.0.
+    stage = _stage_for(sport)
+    combo_factor = stage.get("combo_factor", 1.0) if stage else 1.0
 
-    # Learning loop: if your logged results say the model is overconfident on combos,
-    # shrink the probability we bet on by the measured 'reality factor'.
     from app.bet_log import reality_factor
     rf = reality_factor(user) if user else None
     adj_prob = combined_prob * combo_factor
@@ -363,12 +373,11 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Opt
     ev = P.expected_value(adj_prob, combined_odds)
     stake = P.recommended_stake(adj_prob, combined_odds, bankroll, settings.KELLY_FRACTION)
     return {
-        "legs": legs,
-        "leg_count": len(legs),
+        "legs": legs, "leg_count": len(legs), "sport": sports.normalize(sport),
         "combined_model_prob": round(combined_prob, 4),
         "experience_adjusted_prob": round(adj_prob, 4),
         "reality_factor": rf,
-        "stage": stage["stage"],
+        "stage": stage["stage"] if stage else None,
         "stage_combo_factor": combo_factor,
         "combined_odds_decimal": round(combined_odds, 2),
         "combined_odds_american": P.decimal_to_american(combined_odds),
@@ -381,38 +390,39 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Opt
             "Every leg you add multiplies the payout but also multiplies the ways to lose. "
             "Combos are almost always -EV unless each leg is independently +value."
             + (f" Knockout-stage shrink applied ({stage['stage']}, factor {combo_factor})."
-               if combo_factor < 1.0 else "")
+               if stage and combo_factor < 1.0 else "")
             + (f" Estimate shrunk by your logged results (reality factor {rf})." if rf else "")
         ),
     }
 
 
-def monitor_live_bets(scores: List[Dict], user: str) -> List[Dict]:
-    """
-    Watch every pending logged parlay against the LIVE games it involves and decide
-    whether to flash CASH OUT. The light turns on when the parlay's live combined
-    probability has collapsed (a leg going wrong mid-game) — i.e. it's now unlikely to hit.
-    """
-    from app.data_sources.odds_api import _estimate_minute
+def monitor_live_bets(scores: List[Dict], user: str, sport: str = "soccer") -> List[Dict]:
+    """Watch pending logged parlays for the given sport against the LIVE games they involve
+    and decide whether to flash CASH OUT."""
+    from app.data_sources.odds_api import _estimate_minute, _estimate_inning
     from app import bet_log
 
-    # Index live/finished games by (home, away).
+    sport = sports.normalize(sport)
+    M = sports.model(sport)
+    is_mlb = sport == "mlb"
+
     idx = {}
     for s in scores:
         h, a = s.get("home_team"), s.get("away_team")
         score_map = {x["name"]: x.get("score") for x in (s.get("scores") or [])}
         idx[(h, a)] = {
             "completed": bool(s.get("completed")),
-            "sa": int(score_map.get(h) or 0),
-            "sb": int(score_map.get(a) or 0),
-            "minute": _estimate_minute(s.get("commence_time", "")),
+            "sa": int(score_map.get(h) or 0), "sb": int(score_map.get(a) or 0),
+            "progress": (_estimate_inning(s.get("commence_time", "")) if is_mlb
+                         else _estimate_minute(s.get("commence_time", ""))),
             "has_score": s.get("scores") is not None,
         }
 
     out = []
     for b in bet_log.pending_bets(user):
+        if sports.normalize(b.get("sport", "soccer")) != sport:
+            continue
         legs = b.get("legs", [])
-        # Skip legacy bets logged before structured legs existed (can't track live).
         if not legs or any(not isinstance(l, dict) for l in legs):
             continue
         combined_live = 1.0
@@ -423,12 +433,18 @@ def monitor_live_bets(scores: List[Dict], user: str) -> List[Dict]:
             h, a = leg.get("home"), leg.get("away")
             g = idx.get((h, a)) if h and a else None
             live_p, state = entry, "not started"
-            if g and (g["completed"] or (g["has_score"] or g["minute"] > 0)):
-                p, trk = live_leg_probability(h, a, g["sa"], g["sb"], g["minute"],
-                                              leg.get("market"), leg.get("selection"))
+            if g and (g["completed"] or (g["has_score"] or g["progress"] > 0)):
+                if is_mlb:
+                    p, trk = M.live_leg_probability(h, a, g["sa"], g["sb"], g["progress"],
+                                                    leg.get("market"), leg.get("selection"))
+                    unit = "inn"
+                else:
+                    p, trk = M.live_leg_probability(h, a, g["sa"], g["sb"], g["progress"],
+                                                    leg.get("market"), leg.get("selection"))
+                    unit = "'"
                 if trk and p is not None:
                     live_p = p
-                    state = "final" if g["completed"] else f"live {g['minute']}'"
+                    state = "final" if g["completed"] else f"live {g['progress']}{unit}"
                     if not g["completed"]:
                         any_live = True
                     if g["completed"] and p < 0.02:
@@ -444,9 +460,6 @@ def monitor_live_bets(scores: List[Dict], user: str) -> List[Dict]:
 
         entry_comb = b.get("model_prob") or 0.0001
         health = combined_live / entry_comb if entry_comb else 1.0
-        # Cash out EARLIER: fire when the parlay has lost ~30% of its value (health<0.70),
-        # not 45%. The exchange price tracks probability, so warning sooner = you still get
-        # real cash-out value instead of pennies on a near-dead ticket.
         if dead:
             action, cash_out = "DEAD — leg already lost", True
         elif any_live and (combined_live < entry_comb * 0.70 or combined_live < 0.12):
@@ -458,18 +471,17 @@ def monitor_live_bets(scores: List[Dict], user: str) -> List[Dict]:
         else:
             action, cash_out = "not started", False
 
-        # The actual live games this parlay touches (so the notifier can ping on goals).
         live_games, seen_g = [], set()
         for leg in legs:
             h, a = leg.get("home"), leg.get("away")
             g = idx.get((h, a)) if h and a else None
-            if g and (h, a) not in seen_g and (g["has_score"] or g["minute"] > 0 or g["completed"]):
+            if g and (h, a) not in seen_g and (g["has_score"] or g["progress"] > 0 or g["completed"]):
                 seen_g.add((h, a))
                 live_games.append({"home": h, "away": a, "sa": g["sa"], "sb": g["sb"],
-                                   "minute": g["minute"], "completed": g["completed"]})
+                                   "minute": g["progress"], "completed": g["completed"]})
 
         out.append({
-            "id": b["id"], "legs": leg_views,
+            "id": b["id"], "sport": sport, "legs": leg_views,
             "entry_prob": round(entry_comb, 3), "live_prob": round(combined_live, 3),
             "health": round(health, 2), "any_live": any_live,
             "action": action, "cash_out": cash_out, "live_games": live_games,
@@ -479,30 +491,16 @@ def monitor_live_bets(scores: List[Dict], user: str) -> List[Dict]:
 
 def cashout_decision(entry_price: float, current_market_price: float,
                      model_prob: float, stake: float = 100.0) -> Dict:
-    """
-    Should you cash out / hedge a position?
-
-    Prices are 0-1 (Kalshi/Polymarket cents/100, or implied prob of a back bet).
-      entry_price          = price you bought YES at (your cost per contract)
-      current_market_price = price you could sell YES at right now
-      model_prob           = the model's fair value for YES right now
-
-    The 'tables turned' alert fires when the model's fair value has collapsed
-    relative to where you got in.
-    """
+    """Should you cash out / hedge a position? Prices are 0-1 (Kalshi/Polymarket cents/100)."""
     entry_price = min(max(entry_price, 1e-4), 1 - 1e-4)
     current_market_price = min(max(current_market_price, 1e-4), 1 - 1e-4)
     model_prob = min(max(model_prob, 1e-4), 1 - 1e-4)
 
     pnl_pct = (current_market_price - entry_price) / entry_price
     in_profit = current_market_price > entry_price
+    market_vs_model = current_market_price - model_prob
+    tables_turned = model_prob < entry_price * 0.8
 
-    # Fair value vs the price you can sell at right now.
-    market_vs_model = current_market_price - model_prob  # >0 => market overpays you to sell
-
-    tables_turned = model_prob < entry_price * 0.8  # your side has lost >=20% of its fair value
-
-    # Decision logic.
     if tables_turned and current_market_price > entry_price * 0.6:
         action = "CASH OUT NOW"
         reason = ("Your side is deteriorating — the model's fair value has dropped well below "
@@ -532,6 +530,5 @@ def cashout_decision(entry_price: float, current_market_price: float,
         "unrealized_pnl_pct": round(pnl_pct * 100, 2),
         "cashout_value": round(current_market_price * (stake / entry_price), 2),
         "tables_turned": tables_turned,
-        "action": action,
-        "reason": reason,
+        "action": action, "reason": reason,
     }

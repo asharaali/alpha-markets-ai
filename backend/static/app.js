@@ -4,6 +4,44 @@ const API = ""; // same origin
 let comboLegs = [];
 let pollTimer = null;
 
+/* ---------- sport switch (soccer World Cup | MLB) ---------- */
+let SPORT = "soccer";
+const SPORTS_META = {
+  soccer: { icon: "⚽", label: "World Cup", unit: "goals", winMarket: "Match Result", hasDraw: true },
+  mlb: { icon: "⚾", label: "MLB", unit: "runs", winMarket: "Moneyline", hasDraw: false },
+};
+const meta = () => SPORTS_META[SPORT];
+// append ?sport= to a GET url; add &sport= if it already has a query string
+function sp(url) { return url + (url.includes("?") ? "&" : "?") + "sport=" + SPORT; }
+
+document.querySelectorAll(".sportbtn").forEach((b) => {
+  b.addEventListener("click", () => {
+    if (b.dataset.sport === SPORT) return;
+    document.querySelectorAll(".sportbtn").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    SPORT = b.dataset.sport;
+    // reset per-sport caches + UI state
+    comboLegs = []; renderComboLegs();
+    _coGames = []; _marketsCache = {}; _singles = [];
+    document.getElementById("lbGame").innerHTML = `<option value="">1. choose game…</option>`;
+    document.getElementById("coGame").innerHTML = `<option value="">choose game…</option>`;
+    document.getElementById("singleCat").innerHTML = `<option value="">All categories</option>`;
+    const tl = document.getElementById("tagline");
+    if (tl) tl.textContent = `Edge detection & risk-sized calls — ${meta().label} beta`;
+    loadModelInfo();
+    // reload whichever tab is currently open
+    const active = document.querySelector(".tab.active");
+    if (active) {
+      const t = active.dataset.tab;
+      if (t === "dashboard") loadMatches();
+      else if (t === "kalshi") loadKalshi();
+      else if (t === "singles") loadSingles();
+      else if (t === "combo") loadComboGames();
+      else if (t === "cashout") loadCashoutGames();
+    } else loadMatches();
+  });
+});
+
 /* ---------- tabs ---------- */
 document.querySelectorAll(".tab").forEach((t) => {
   t.addEventListener("click", () => {
@@ -26,7 +64,7 @@ let _coGames = [];
 async function loadCashoutGames() {
   if (_coGames.length) return;
   try {
-    const d = await (await fetch(`${API}/api/matches`)).json();
+    const d = await (await fetch(sp(`${API}/api/matches`))).json();
     _coGames = (d.matches || []).filter((m) => m.status !== "completed");
     const sel = document.getElementById("coGame");
     sel.innerHTML = `<option value="">choose game…</option>`
@@ -37,7 +75,8 @@ document.getElementById("coGame").addEventListener("change", (e) => {
   const m = _coGames[e.target.value];
   const s = document.getElementById("coSel");
   if (!m) { s.innerHTML = `<option value="">side…</option>`; return; }
-  s.innerHTML = [m.home, "Draw", m.away].map((x) => `<option value="${x}">${x}</option>`).join("");
+  const sides = meta().hasDraw ? [m.home, "Draw", m.away] : [m.home, m.away];
+  s.innerHTML = sides.map((x) => `<option value="${x}">${x}</option>`).join("");
 });
 document.getElementById("coLivePull").addEventListener("click", async () => {
   const m = _coGames[document.getElementById("coGame").value];
@@ -220,7 +259,7 @@ function evClass(ev) { return ev > 0 ? "pos" : "neg"; }
 /* ---------- dashboard ---------- */
 async function loadMatches() {
   try {
-    const res = await fetch(`${API}/api/matches`);
+    const res = await fetch(sp(`${API}/api/matches`));
     const data = await res.json();
     setLive(true, data);
     updateDataBanner(data);
@@ -304,20 +343,27 @@ document.querySelectorAll(".filt").forEach((b) => {
 
 function matchCard(m) {
   const p = m.model.probs;
+  const isMlb = (m.sport || SPORT) === "mlb";
+  const hasDraw = !isMlb;
+  const unit = isMlb ? "runs" : "goals";
   const live = m.status === "live";
+  const clock = isMlb ? `${(m.live_half === "bottom" ? "Bot " : "Top ")}${m.live_inning || 1}` : `${m.live_minute || 0}'`;
   const head = live
-    ? `<div class="live-tag">LIVE ${m.live_minute || 0}'</div>
+    ? `<div class="live-tag">LIVE ${clock}</div>
        <div class="score">${m.live_score.home}–${m.live_score.away}</div>`
     : `<div class="meta">${new Date(m.commence_time).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}</div>`;
 
   // Market-implied probabilities (from the book's odds) so you can compare to our model.
   let marketLine = "";
-  const mr = (m.suggestions || []).filter((s) => s.market === "Match Result");
-  if (mr.length === 3) {
+  const winMkt = isMlb ? "Moneyline" : "Match Result";
+  const mr = (m.suggestions || []).filter((s) => s.market === winMkt);
+  if (mr.length >= 2) {
     const g = (name) => mr.find((s) => s.selection === name);
-    const h = g(m.home), dr = g("Draw"), a = g(m.away);
-    if (h && dr && a) {
-      marketLine = `<div class="marketline">Market (book/Kalshi) · ${m.home} ${pct(h.market_prob)} · Draw ${pct(dr.market_prob)} · ${m.away} ${pct(a.market_prob)}</div>`;
+    const h = g(m.home), a = g(m.away), dr = g("Draw");
+    if (h && a) {
+      marketLine = `<div class="marketline">Market (book/Kalshi) · ${m.home} ${pct(h.market_prob)}`
+        + (hasDraw && dr ? ` · Draw ${pct(dr.market_prob)}` : "")
+        + ` · ${m.away} ${pct(a.market_prob)}</div>`;
     }
   }
 
@@ -326,8 +372,9 @@ function matchCard(m) {
   if (live && m.model.pregame_probs) {
     const pre = m.model.pregame_probs;
     const dH = (p.home - pre.home) * 100;
+    const exp = m.model.expected_final_runs || m.model.expected_final_goals;
     const arrow = (d) => d > 1 ? `<span class="up">▲${d.toFixed(0)}</span>` : d < -1 ? `<span class="down">▼${Math.abs(d).toFixed(0)}</span>` : "";
-    liveShift = `<div class="live-shift">live vs pre-game: ${m.home} ${arrow(dH)} · exp final ${m.model.expected_final_goals.a}–${m.model.expected_final_goals.b}</div>`;
+    liveShift = `<div class="live-shift">live vs pre-game: ${m.home} ${arrow(dH)} · exp final ${exp.a}–${exp.b} ${unit}</div>`;
   }
 
   const rows = m.suggestions.map((s) => {
@@ -353,14 +400,14 @@ function matchCard(m) {
     </div>
     <div class="probbar">
       <span class="h" style="width:${p.home*100}%"></span>
-      <span class="d" style="width:${p.draw*100}%"></span>
+      ${hasDraw ? `<span class="d" style="width:${p.draw*100}%"></span>` : ""}
       <span class="a" style="width:${p.away*100}%"></span>
     </div>
-    <div class="problabels"><span><b>Our model</b> · ${m.home} ${pct(p.home)}</span><span>Draw ${pct(p.draw)}</span><span>${m.away} ${pct(p.away)}</span></div>
+    <div class="problabels"><span><b>Our model</b> · ${m.home} ${pct(p.home)}</span>${hasDraw ? `<span>Draw ${pct(p.draw)}</span>` : ""}<span>${m.away} ${pct(p.away)}</span></div>
     ${marketLine}
     ${liveShift}
     <div class="sugg">${rows}</div>
-    <button class="markets-btn" data-home="${m.home}" data-away="${m.away}">＋ all markets — goals, scores, player props ▾</button>
+    <button class="markets-btn" data-home="${m.home}" data-away="${m.away}">＋ all markets — ${isMlb ? "run line, totals, team totals, F5" : "goals, scores, player props"} ▾</button>
     <div class="markets-box" id="mk-${m.id}"></div>
   </div>`;
 }
@@ -376,7 +423,7 @@ async function toggleMarkets(btn) {
   box.classList.add("open");
   btn.innerHTML = btn.innerHTML.replace("▾", "▴");
   const home = btn.dataset.home, away = btn.dataset.away;
-  const d = await (await fetch(`${API}/api/markets?team_a=${encodeURIComponent(home)}&team_b=${encodeURIComponent(away)}`)).json();
+  const d = await (await fetch(sp(`${API}/api/markets?team_a=${encodeURIComponent(home)}&team_b=${encodeURIComponent(away)}`))).json();
   // Markets Kalshi lets you put in a parlay: who wins, win margin/spread, total goals, BTTS, goalscorers.
   const kalshiParlay = (cat) => /match result|winning margin|spread|total goals|both teams|goalscorer/i.test(cat);
   box.innerHTML = Object.entries(d.markets).map(([cat, sels]) => `
@@ -406,7 +453,7 @@ let _marketsCache = {};
 async function loadComboGames() {
   const sel = document.getElementById("lbGame");
   if (sel.options.length > 1) return; // already loaded
-  const d = await (await fetch(`${API}/api/matches`)).json();
+  const d = await (await fetch(sp(`${API}/api/matches`))).json();
   const up = d.matches.filter((m) => m.status !== "completed");
   sel.innerHTML = `<option value="">1. choose game…</option>` +
     up.map((m) => `<option data-home="${m.home}" data-away="${m.away}">${m.home} v ${m.away}</option>`).join("");
@@ -420,7 +467,7 @@ document.getElementById("lbGame").addEventListener("change", async (e) => {
   mSel.innerHTML = `<option>loading…</option>`;
   const key = `${home}|${away}`;
   if (!_marketsCache[key]) {
-    _marketsCache[key] = (await (await fetch(`${API}/api/markets?team_a=${encodeURIComponent(home)}&team_b=${encodeURIComponent(away)}`)).json()).markets;
+    _marketsCache[key] = (await (await fetch(sp(`${API}/api/markets?team_a=${encodeURIComponent(home)}&team_b=${encodeURIComponent(away)}`))).json()).markets;
   }
   mSel.dataset.home = home; mSel.dataset.away = away;
   mSel.innerHTML = `<option value="">2. market…</option>` +
@@ -478,7 +525,7 @@ document.getElementById("evalCombo").addEventListener("click", async () => {
   if (!comboLegs.length) return alert("Add at least one leg.");
   const res = await fetch(`${API}/api/combo`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ legs: comboLegs }),
+    body: JSON.stringify({ legs: comboLegs, sport: SPORT }),
   });
   const d = await res.json();
   lastCombo = d;
@@ -549,7 +596,14 @@ async function loadKalshi() {
   const wrap = document.getElementById("kalshiGames");
   wrap.innerHTML = `<div class="empty">Loading Kalshi markets…</div>`;
   try {
-    const d = await (await fetch(`${API}/api/kalshi`)).json();
+    const d = await (await fetch(sp(`${API}/api/kalshi`))).json();
+    // MLB returns a flat list of priced moneyline singles; soccer returns per-game cards.
+    if (d.sport === "mlb") {
+      const bets = d.singles || [];
+      if (!bets.length) { wrap.innerHTML = `<div class="empty">No live Kalshi MLB game prices right now.</div>`; return; }
+      wrap.innerHTML = bets.map(kalshiMlbCard).join("");
+      return;
+    }
     if (!d.games.length) { wrap.innerHTML = `<div class="empty">No Kalshi World Cup markets open.</div>`; return; }
     const note = d.tradeable === 0
       ? `<div class="empty" style="grid-column:1/-1">${d.count} World Cup events found, but Kalshi has no live prices on them yet (untraded order books). They'll populate as games get liquidity — the model overlay is ready.</div>` : "";
@@ -557,6 +611,19 @@ async function loadKalshi() {
   } catch (e) {
     wrap.innerHTML = `<div class="empty">Couldn't reach Kalshi.</div>`;
   }
+}
+
+function kalshiMlbCard(b) {
+  const star = b.value_bet ? `<span class="star">★ VALUE</span>` : "";
+  const bookTxt = b.book_prob != null ? `book ${(b.book_prob*100).toFixed(0)}%` : "model-only";
+  return `<div class="card ${b.value_bet ? "" : "dim"}">
+    <div class="card-head"><div class="teams">${b.selection} ${star}</div>
+      <div class="meta">${b.away} @ ${b.home}</div></div>
+    <div class="sugg"><div class="sugg-row">
+      <span class="name"><span class="tier-dot ${b.tier}"></span>${b.kalshi_price_cents}¢</span>
+      <span class="odds">model ${(b.model_prob*100).toFixed(0)}% <small>${bookTxt}</small></span>
+      <span class="ev ${b.ev_per_dollar>0?'pos':'neg'}">${b.ev_per_dollar>0?"+":""}${(b.ev_per_dollar*100).toFixed(1)}%</span>
+    </div></div></div>`;
 }
 
 function kalshiCard(g) {
@@ -585,7 +652,7 @@ async function loadSingles() {
   const wrap = document.getElementById("singlesList");
   wrap.innerHTML = `<div class="empty">Loading every Kalshi market + cross-checking the books…</div>`;
   try {
-    const d = await (await fetch(`${API}/api/kalshi/singles`)).json();
+    const d = await (await fetch(sp(`${API}/api/kalshi/singles`))).json();
     _singles = d.bets || [];
     const sel = document.getElementById("singleCat");
     if (sel.options.length <= 1)
@@ -671,7 +738,7 @@ async function placeSingle(b) {
     market_odds_decimal: b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99,
     home: b.home, away: b.away, market: b.bet_type, selection: b.selection,
     kalshi_ticker: b.ticker,
-  }], leg_count: 1, combined_model_prob: b.fair_prob,
+  }], leg_count: 1, combined_model_prob: b.fair_prob, sport: SPORT,
     combined_odds_decimal: b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99,
     payout_multiple: b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99 };
   const btn = document.getElementById(`place-${b.ticker}`);
@@ -826,7 +893,7 @@ async function settle(id, hit) {
 /* ---------- model badge ---------- */
 async function loadModelInfo() {
   try {
-    const d = await (await fetch(`${API}/api/model-info`)).json();
+    const d = await (await fetch(sp(`${API}/api/model-info`))).json();
     const b = document.getElementById("modelBadge");
     if (d.trained) {
       b.textContent = `model ✓ ${(d.metrics.accuracy*100).toFixed(0)}% · ${d.n_teams} teams`;
@@ -873,7 +940,7 @@ document.querySelectorAll(".btn.ab").forEach((b) => {
     const style = b.dataset.style;
     const dateVal = document.getElementById("abDate").value;
     const legs = parseInt(document.getElementById("abLegs").value, 10) || 3;
-    const data = await (await fetch(`${API}/api/matches`)).json();
+    const data = await (await fetch(sp(`${API}/api/matches`))).json();
     // All styles (incl. Best Parlay) use only the games on the selected date.
     const games = data.matches
       .filter((m) => m.status !== "completed" && (!dateVal || localDate(m.commence_time) === dateVal))
@@ -881,7 +948,7 @@ document.querySelectorAll(".btn.ab").forEach((b) => {
     if (!games.length) return alert("No games found for that date. Try another day or the All filter on the Live Board.");
     const r = await (await fetch(`${API}/api/parlay/auto`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ games, style, legs }),
+      body: JSON.stringify({ games, style, legs, sport: SPORT }),
     })).json();
     if (r.error) return alert(r.error);
     comboLegs = r.legs.map((l) => ({
