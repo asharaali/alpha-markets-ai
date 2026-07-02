@@ -264,6 +264,33 @@ def moneyline_prob(home: str, away: str, sp_home: str = "avg", sp_away: str = "a
     return _moneyline_from_matrix(ph, pa, _elo_win_prob(home, away))
 
 
+def run_margin_prob(home: str, away: str, team_is_home: bool, margin: float,
+                    sp_home: str = "avg", sp_away: str = "avg") -> float:
+    """P(the chosen team wins by MORE than `margin` runs) — prices Kalshi's KXMLBSPREAD
+    'X wins by over N.5 runs' run-line contracts for any line."""
+    lam_home, lam_away = expected_runs(home, away, sp_home, sp_away)
+    ph, pa = _matrix(lam_home, lam_away)
+    return _cover_by(ph, pa, team_is_home, margin)
+
+
+def f5_probs(home: str, away: str, sp_home: str = "avg", sp_away: str = "avg") -> Tuple[float, float, float]:
+    """(home, tie, away) win probabilities through the first 5 innings — a real 3-way
+    market (no extras to break a tie through 5). Prices Kalshi's KXMLBF5."""
+    lam_home, lam_away = expected_runs(home, away, sp_home, sp_away)
+    ph5, pa5 = _matrix(lam_home * F5_FRACTION, lam_away * F5_FRACTION)
+    h5 = a5 = tie5 = 0.0
+    for i in range(len(ph5)):
+        for j in range(len(pa5)):
+            p = ph5[i] * pa5[j]
+            if i > j:
+                h5 += p
+            elif i < j:
+                a5 += p
+            else:
+                tie5 += p
+    return h5, tie5, a5
+
+
 def _sel(label: str, prob: float) -> Dict:
     prob = min(max(prob, 1e-4), 0.9999)
     return {"label": label, "prob": round(prob, 4), "fair_odds": round(1 / prob, 2)}
@@ -300,15 +327,22 @@ def extended_markets(home: str, away: str, sp_home: str = "avg", sp_away: str = 
             out += [_sel(f"Over {ln} runs", o), _sel(f"Under {ln} runs", 1 - o)]
         return out
 
+    # Run line by margin, matching Kalshi's KXMLBSPREAD ladder (wins by over 1.5/2.5/3.5).
+    run_line = [
+        _sel(f"{home} -1.5", _cover_by(ph, pa, True, 1.5)),
+        _sel(f"{away} +1.5", 1 - _cover_by(ph, pa, True, 1.5)),
+        _sel(f"{away} -1.5", _cover_by(ph, pa, False, 1.5)),
+        _sel(f"{home} +1.5", 1 - _cover_by(ph, pa, False, 1.5)),
+    ]
+    for mgn in (2.5, 3.5):
+        run_line += [_sel(f"{home} -{mgn}", _cover_by(ph, pa, True, mgn)),
+                     _sel(f"{away} -{mgn}", _cover_by(ph, pa, False, mgn))]
+
     markets = {
         "Moneyline": [_sel(home, p_home), _sel(away, p_away)],
-        "Run Line": [
-            _sel(f"{home} -1.5", _cover_by(ph, pa, True, 1.5)),
-            _sel(f"{away} +1.5", 1 - _cover_by(ph, pa, True, 1.5)),
-            _sel(f"{away} -1.5", _cover_by(ph, pa, False, 1.5)),
-            _sel(f"{home} +1.5", 1 - _cover_by(ph, pa, False, 1.5)),
-        ],
-        "Total Runs (Over/Under)": totals([6.5, 7.5, 8.5, 9.5, 10.5, 11.5]),
+        "Run Line": run_line,
+        # Full total-runs ladder Kalshi lists on KXMLBTOTAL (Over 2.5 up).
+        "Total Runs (Over/Under)": totals([2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5]),
         f"{home} Team Total": [
             s for ln in (2.5, 3.5, 4.5)
             for s in (_sel(f"{home} Over {ln}", _team_over(ph, ln)),

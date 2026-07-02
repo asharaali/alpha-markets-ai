@@ -26,8 +26,10 @@ KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
 _UA = {"User-Agent": "AlphaMarketsAI/1.0"}
 
 SERIES = {
-    "KXMLBGAME":  ("Game Line", "Moneyline"),
-    "KXMLBTOTAL": ("Game Line", "Total Runs"),
+    "KXMLBGAME":   ("Game Line", "Moneyline"),
+    "KXMLBSPREAD": ("Game Line", "Run Line"),
+    "KXMLBTOTAL":  ("Game Line", "Total Runs"),
+    "KXMLBF5":     ("Game Prop", "First 5 Innings"),
 }
 
 _CACHE: Dict[str, object] = {"data": None, "ts": 0.0}
@@ -138,6 +140,26 @@ def _model_prob_for(series: str, sub: str, home: str, away: str,
         over = B.run_total_prob(home, away, line, sph, spa)
         is_over = m.group(1).lower() == "over"
         return (over if is_over else 1 - over), f"{away} @ {home}: {m.group(1)} {line} runs"
+    if series == "KXMLBSPREAD":                     # 'Los Angeles D wins by over 1.5 runs'
+        m = re.search(r"(.+?)\s+wins by over\s+([\d.]+)", sub)
+        if not m:
+            return None, sub
+        team = _canon(m.group(1).strip())
+        margin = float(m.group(2))
+        if team not in (home, away):
+            return None, sub
+        p = B.run_margin_prob(home, away, team == home, margin, sph, spa)
+        return p, f"{away} @ {home}: {team} -{margin}"
+    if series == "KXMLBF5":                          # 'X wins first 5 innings' | 'Tie'
+        h5, tie5, a5 = B.f5_probs(home, away, sph, spa)
+        if sub.lower().strip() in ("tie", "draw"):
+            return tie5, f"{away} @ {home}: Tie (F5)"
+        team = _canon(sub.replace("wins first 5 innings", "").strip())
+        if team == home:
+            return h5, f"{away} @ {home}: {home} (F5)"
+        if team == away:
+            return a5, f"{away} @ {home}: {away} (F5)"
+        return None, sub
     return None, sub
 
 
