@@ -713,6 +713,7 @@ async function researchSingle(b) {
 function confBadge(b) {
   if (b.confidence === "high") return `<span class="result-badge won" title="${b.sources}">✅ books agree</span>`;
   if (b.confidence === "medium") return `<span class="result-badge" style="background:var(--amber)" title="${b.sources}">⚠️ books disagree</span>`;
+  if (b.confidence === "reference") return `<span class="result-badge" style="background:#4a3a6b" title="${b.sources}">📊 reference — not a value call</span>`;
   return `<span class="result-badge" style="background:#3a4a6b" title="${b.sources}">🔵 model-only</span>`;
 }
 

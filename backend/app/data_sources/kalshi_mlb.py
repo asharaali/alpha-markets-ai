@@ -20,6 +20,7 @@ import httpx
 from app import probability as P
 from app.analysis import MODEL_WEIGHT, MIN_EDGE, LONGSHOT_FLOOR, HEAVY_FAV_CAP, _tier
 from app import baseball_model as B
+from app import baseball_props as PR
 from app.data_sources.kalshi_orderbook import orderbook_prices
 
 KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2"
@@ -30,7 +31,22 @@ SERIES = {
     "KXMLBSPREAD": ("Game Line", "Run Line"),
     "KXMLBTOTAL":  ("Game Line", "Total Runs"),
     "KXMLBF5":     ("Game Prop", "First 5 Innings"),
+    "KXMLBRFI":    ("Game Prop", "Run 1st Inning"),
+    "KXMLBHR":     ("Player Prop", "Home Runs"),
+    "KXMLBHIT":    ("Player Prop", "Hits"),
+    "KXMLBTB":     ("Player Prop", "Total Bases"),
+    "KXMLBHRR":    ("Player Prop", "Hits+Runs+RBIs"),
+    "KXMLBKS":     ("Player Prop", "Strikeouts"),
 }
+
+# Player-prop series -> (batter kind for baseball_props.batter_prop, short label)
+_BATTER_PROPS = {"KXMLBHR": ("hr", "HR"), "KXMLBHIT": ("hits", "hits"),
+                 "KXMLBTB": ("tb", "TB"), "KXMLBHRR": ("hrr", "H+R+RBI")}
+# Props are priced for REFERENCE only, never flagged as value: our rate-based model is
+# blind to the things the prop market actually prices (a pitcher's pitch-count leash, the
+# day's lineup, platoon splits, weather). A big model-vs-market gap on a prop is our blind
+# spot, not an edge — so we show the read but don't tell him to bet it.
+_PROP_SERIES = set(_BATTER_PROPS) | {"KXMLBKS", "KXMLBRFI"}
 
 _CACHE: Dict[str, object] = {"data": None, "ts": 0.0}
 _CACHE_TTL = 90
@@ -122,8 +138,37 @@ def _ml_consensus(board: List[Dict]) -> Dict[Tuple[str, str], Dict]:
 
 
 def _model_prob_for(series: str, sub: str, home: str, away: str,
-                    sph="avg", spa="avg") -> Tuple[Optional[float], str]:
+                    sph="avg", spa="avg", hit_idx=None, pit_idx=None) -> Tuple[Optional[float], str]:
     sub = (sub or "").strip()
+    matchup = f"{away} @ {home}"
+
+    # ---- player & game props ----
+    if series in _BATTER_PROPS:
+        m = re.search(r"(.+?):\s*(\d+)\+", sub)
+        if not m:
+            return None, sub
+        name, line = m.group(1).strip(), int(m.group(2))
+        stat = (hit_idx or {}).get(PR._norm(name))
+        if not stat:
+            return None, sub
+        kind, short = _BATTER_PROPS[series]
+        p = PR.batter_prop(stat, kind, line, park=B._park(home))
+        return p, f"{name} {line}+ {short}"
+    if series == "KXMLBKS":                          # 'Randy Vásquez: 3+'
+        m = re.search(r"(.+?):\s*(\d+)\+", sub)
+        if not m:
+            return None, sub
+        name, line = m.group(1).strip(), int(m.group(2))
+        stat = (pit_idx or {}).get(PR._norm(name))
+        if not stat:
+            return None, sub
+        return PR.pitcher_strikeouts(stat, line), f"{name} {line}+ K"
+    if series == "KXMLBRFI":                          # 'Yes' — a run in the 1st inning
+        lh, la = B.expected_runs(home, away, sph, spa)
+        yes = PR.first_inning_run_prob(lh, la)
+        is_yes = sub.lower().strip() in ("yes", "")
+        return (yes if is_yes else 1 - yes), f"{matchup}: Run in 1st ({'Yes' if is_yes else 'No'})"
+
     if series == "KXMLBGAME":
         team = _canon(sub)
         p_home, p_away = B.moneyline_prob(home, away, sph, spa)
@@ -185,6 +230,9 @@ async def get_single_bets(board: Optional[List[Dict]] = None) -> List[Dict]:
     # the same real pitching matchup the Live Board does.
     sp_idx = {(g.get("home"), g.get("away")): (g.get("sp_home", "avg"), g.get("sp_away", "avg"))
               for g in (board or [])}
+    # Season stat indexes for player props (bulk, cached in baseball_props).
+    hit_idx = await PR.hitting_index()
+    pit_idx = await PR.pitching_index()
 
     async with httpx.AsyncClient(timeout=25, headers=_UA) as client:
         all_events = []
@@ -220,11 +268,16 @@ async def get_single_bets(board: Optional[List[Dict]] = None) -> List[Dict]:
             price = prices.get(m.get("ticker"))
             if price is None:
                 continue
-            mp, label = _model_prob_for(series, m.get("yes_sub_title", ""), home, away, sph, spa)
+            mp, label = _model_prob_for(series, m.get("yes_sub_title", ""), home, away, sph, spa,
+                                        hit_idx=hit_idx, pit_idx=pit_idx)
             if mp is None:
                 continue
             book_prob = _book_prob_for(series, label, home, away, cons)
             ev = _evaluate(mp, price, book_prob, 1 if cons else 0)
+            if series in _PROP_SERIES:               # reference-only: never a value flag
+                ev["value_bet"] = False
+                ev["confidence"] = "reference"
+                ev["sources"] = "model rate — not workload/lineup/matchup adjusted (reference only)"
             out.append({
                 "ticker": m.get("ticker"), "category": cat, "bet_type": bet_type,
                 "home": home, "away": away, "selection": label,
