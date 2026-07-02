@@ -424,9 +424,9 @@ def live_leg_probability(home, away, sa, sb, inning, market, selection,
     p_extra = _elo_win_prob(home, away)
     hl, al = home.lower(), away.lower()
 
+    import re
     if "moneyline" in m or (sl in (hl, al)):
-        p_home, p_away = _moneyline_from_matrix(ph, pa, p_extra)
-        # account for the runs already on the board
+        # Win prob folding in the runs already on the board; regulation ties -> extras by Elo.
         p_home = p_away = p_tie = 0.0
         for i in range(len(ph)):
             for j in range(len(pa)):
@@ -445,16 +445,12 @@ def live_leg_probability(home, away, sa, sb, inning, market, selection,
         if al in sl:
             return p_away, True
 
-    if "run line" in m or "-1.5" in s or "+1.5" in s:
-        import re
-        mm = re.search(r"([+-])1\.5", s)
+    mm = re.search(r"([+-])(\d+)\.5", s)
+    if "run line" in m or mm:
         if mm:
             team_home = hl in sl
             plus = mm.group(1) == "+"
-            # current lead already banked
-            lead_home = sa - sb
-            # P(final home margin >= 2) etc, folding in current lead
-            need = 2
+            need = int(mm.group(2)) + 1        # -1.5 -> 2, -2.5 -> 3, -3.5 -> 4
             tot = 0.0
             for i in range(len(ph)):
                 for j in range(len(pa)):
@@ -465,7 +461,6 @@ def live_leg_probability(home, away, sa, sb, inning, market, selection,
             return tot, True
 
     if "over" in sl or "under" in sl or "total" in m:
-        import re
         mm = re.search(r"(\d+)\.5", s)
         line = float(mm.group(0)) if mm else 8.5
         if hl in sl and "team total" in m:
