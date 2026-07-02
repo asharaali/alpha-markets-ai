@@ -119,11 +119,12 @@ def _ml_consensus(board: List[Dict]) -> Dict[Tuple[str, str], Dict]:
     return idx
 
 
-def _model_prob_for(series: str, sub: str, home: str, away: str) -> Tuple[Optional[float], str]:
+def _model_prob_for(series: str, sub: str, home: str, away: str,
+                    sph="avg", spa="avg") -> Tuple[Optional[float], str]:
     sub = (sub or "").strip()
     if series == "KXMLBGAME":
         team = _canon(sub)
-        p_home, p_away = B.moneyline_prob(home, away)
+        p_home, p_away = B.moneyline_prob(home, away, sph, spa)
         if team == home:
             return p_home, f"{away} @ {home}: {home} win"
         if team == away:
@@ -134,7 +135,7 @@ def _model_prob_for(series: str, sub: str, home: str, away: str) -> Tuple[Option
         if not m:
             return None, sub
         line = float(m.group(2))
-        over = B.run_total_prob(home, away, line)
+        over = B.run_total_prob(home, away, line, sph, spa)
         is_over = m.group(1).lower() == "over"
         return (over if is_over else 1 - over), f"{away} @ {home}: {m.group(1)} {line} runs"
     return None, sub
@@ -158,6 +159,10 @@ async def get_single_bets(board: Optional[List[Dict]] = None) -> List[Dict]:
         return _CACHE["data"]  # type: ignore[return-value]
 
     cons_idx = _ml_consensus(board or [])
+    # Starter multipliers from the (already enriched) odds board, so the model here prices
+    # the same real pitching matchup the Live Board does.
+    sp_idx = {(g.get("home"), g.get("away")): (g.get("sp_home", "avg"), g.get("sp_away", "avg"))
+              for g in (board or [])}
 
     async with httpx.AsyncClient(timeout=25, headers=_UA) as client:
         all_events = []
@@ -187,12 +192,13 @@ async def get_single_bets(board: Optional[List[Dict]] = None) -> List[Dict]:
             continue
         home, away = teams
         cons = cons_idx.get((home, away))
+        sph, spa = sp_idx.get((home, away), ("avg", "avg"))
         cat, bet_type = SERIES[series]
         for m in (e.get("markets") or []):
             price = prices.get(m.get("ticker"))
             if price is None:
                 continue
-            mp, label = _model_prob_for(series, m.get("yes_sub_title", ""), home, away)
+            mp, label = _model_prob_for(series, m.get("yes_sub_title", ""), home, away, sph, spa)
             if mp is None:
                 continue
             book_prob = _book_prob_for(series, label, home, away, cons)

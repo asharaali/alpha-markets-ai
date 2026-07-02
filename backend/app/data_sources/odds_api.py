@@ -319,12 +319,28 @@ def merge_scores(matches: List[Dict], scores: List[Dict], sport: str = "soccer")
     return any_live
 
 
-async def get_matches(sport: str = "soccer") -> List[Dict]:
-    key = sports.normalize(sport)
+async def _attach_mlb_starters(matches: List[Dict]) -> None:
+    """Fold real probable starting pitchers + their quality multipliers into MLB matches, so
+    the model prices the actual pitching matchup (the biggest factor in a baseball game)."""
+    from app.data_sources.mlb_pitchers import starters_index
+    idx = await starters_index()
+    for m in matches:
+        s = idx.get((m["home"], m["away"]))
+        if not s:
+            continue
+        for side in ("home", "away"):
+            info = s.get(side)
+            if info and info.get("mult"):
+                m[f"sp_{side}"] = info["mult"]                 # numeric multiplier -> model
+                m[f"sp_{side}_name"] = info.get("name")
+                m[f"sp_{side}_era"] = info.get("era")
+                m[f"sp_{side}_label"] = info.get("label")
+
+
+async def _fetch_matches(key: str) -> List[Dict]:
     if settings.DEMO_MODE:
         LIVE_STATUS.update(live=False, reason="demo mode (no key)")
         return _demo_matches(key)
-
     cache = _LIVE_CACHE.setdefault(key, {"data": None, "ts": 0.0})
     if cache["data"] is not None and time.time() - float(cache["ts"]) < settings.ODDS_CACHE_TTL:
         return cache["data"]  # type: ignore[return-value]
@@ -345,6 +361,18 @@ async def get_matches(sport: str = "soccer") -> List[Dict]:
         print(f"[odds_api:{key}] live fetch failed ({exc})")
         LIVE_STATUS.update(live=False, reason=f"connection error: {exc}")
         return cache["data"] if cache["data"] is not None else _demo_matches(key)
+
+
+async def get_matches(sport: str = "soccer") -> List[Dict]:
+    key = sports.normalize(sport)
+    data = await _fetch_matches(key)
+    # Live MLB: overlay real probable starters (demo already carries illustrative tiers).
+    if key == "mlb" and not settings.DEMO_MODE and data:
+        try:
+            await _attach_mlb_starters(data)
+        except Exception as exc:
+            print(f"[odds_api:mlb] starter enrichment skipped: {exc}")
+    return data
 
 
 # ---------------- backward-compatible soccer aliases ----------------

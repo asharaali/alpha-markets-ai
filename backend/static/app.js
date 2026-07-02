@@ -367,6 +367,16 @@ function matchCard(m) {
     }
   }
 
+  // Probable starting pitchers (MLB) — the biggest driver of the matchup.
+  let pitchersLine = "";
+  if (isMlb && (m.sp_home_name || m.sp_away_name)) {
+    const fmt = (name, era, label) => name
+      ? `${name}${era != null ? ` <span class="muted">${era} ERA</span>` : ""} <span class="sp-tag ${label}">${label}</span>`
+      : `<span class="muted">TBD</span>`;
+    pitchersLine = `<div class="pitchers">⚾ Starters · ${fmt(m.sp_away_name, m.sp_away_era, m.sp_away_label)}`
+      + ` <span class="muted">@</span> ${fmt(m.sp_home_name, m.sp_home_era, m.sp_home_label)}</div>`;
+  }
+
   // Live win-probability shift vs pre-game (so you can see momentum swing).
   let liveShift = "";
   if (live && m.model.pregame_probs) {
@@ -404,6 +414,7 @@ function matchCard(m) {
       <span class="a" style="width:${p.away*100}%"></span>
     </div>
     <div class="problabels"><span><b>Our model</b> · ${m.home} ${pct(p.home)}</span>${hasDraw ? `<span>Draw ${pct(p.draw)}</span>` : ""}<span>${m.away} ${pct(p.away)}</span></div>
+    ${pitchersLine}
     ${marketLine}
     ${liveShift}
     <div class="sugg">${rows}</div>

@@ -50,7 +50,12 @@ F5_FRACTION = 5.0 / 9.0
 PITCHER_FACTOR = {"ace": 0.82, "good": 0.91, "avg": 1.00, "weak": 1.12}
 
 
-def pitcher_factor(quality: Optional[str]) -> float:
+def pitcher_factor(quality) -> float:
+    """Run-suppression multiplier for a starter. Accepts either a real numeric multiplier
+    (from the live probable-pitcher feed, e.g. 0.83) or a tier string (ace/good/avg/weak)
+    used as the fallback when no starter data is available."""
+    if isinstance(quality, (int, float)):
+        return float(quality)
     return PITCHER_FACTOR.get((quality or "avg").strip().lower(), 1.00)
 
 
