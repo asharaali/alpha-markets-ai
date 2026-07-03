@@ -11,18 +11,10 @@ behaviour and URLs are unchanged.
 """
 from __future__ import annotations
 from typing import Dict, List, Optional
-import re
 
 from app import probability as P
 from app import sports
 from app.config import settings
-
-# Knockout soccer uses a tighter set of clean markets for parlay legs — but not SO tight
-# that only match-result + corners survive (which made every parlay corner spam). Totals and
-# double-chance hold up fine in knockouts; we still drop the noisy legs (exact margin/spread,
-# BTTS) that a tight, low-event knockout game makes unreliable.
-_KNOCKOUT_RE = re.compile(r"match result|double chance|total goals|corners", re.I)
-
 
 def _stage_for(sport: str) -> Optional[Dict]:
     """Tournament stage only applies to soccer; MLB has no bracket."""
@@ -32,32 +24,62 @@ def _stage_for(sport: str) -> Optional[Dict]:
     return None
 
 
-def _candidate_legs(home: str, away: str, sport: str = "soccer",
-                    stage: Optional[Dict] = None) -> List[Dict]:
-    M = sports.model(sport)
-    cfg = sports.config(sport)
-    knockout = bool(stage and stage.get("is_knockout"))
-    gate = _KNOCKOUT_RE if knockout else re.compile(cfg["parlay_markets"], re.I)
-    em = (M.extended_markets(home, away, stage=stage) if sports.normalize(sport) == "soccer"
-          else M.extended_markets(home, away))
-    legs = []
-    for cat, sels in em["markets"].items():
-        if not gate.search(cat):
+# AUTO-builder discipline: on markets no sportsbook cross-checks ("model-only"), a big model-vs-
+# Kalshi gap is our blind spot, not confirmed value. We keep only this fraction of that gap and
+# shrink the rest back toward the live Kalshi price, so an AUTO-built combo (optimizer or risk
+# tiers) can't compound unconfirmed edges into a fantasy payout. Manual hand-picks skip this —
+# you chose the leg, you own the read (they post fair_prob straight to /api/combo).
+MODEL_ONLY_TRUST = 0.5
+
+
+def _legs_from_singles(singles: List[Dict], games: Optional[List[Dict]] = None) -> List[Dict]:
+    """Turn real-priced Kalshi singles (from data_sources.kalshi_single / kalshi_mlb) into
+    parlay candidate legs for the AUTO builders. Uses the TRADEABLE Kalshi decimal odds — never
+    the model's own 1/prob fair odds — so any combo prices its payout/EV off real money. The
+    per-leg prob is the market-shrunk fair_prob, pulled further toward the Kalshi price on
+    model-only markets (see MODEL_ONLY_TRUST). Optionally restrict to a set of requested games.
+    Reference-only markets (goalscorer/props) are excluded."""
+    want = {(g.get("home"), g.get("away")) for g in games} if games else None
+    out: List[Dict] = []
+    for b in singles:
+        odds = b.get("market_odds_decimal")
+        if odds is None:                               # untraded / no live book -> can't price honestly
             continue
-        mtype = "goalscorer" if "goalscorer" in cat.lower() else cat
-        for s in sels:
-            # A 90-min Draw in a soccer knockout is a trap leg (someone still advances) — skip it.
-            if knockout and "match result" in cat.lower() and s["label"] == "Draw":
-                continue
-            # F5 'Tie' and any explicit tie/draw is a confusing standalone parlay leg — skip.
-            if s["label"].lower().startswith("tie"):
-                continue
-            legs.append({
-                "home": home, "away": away, "market": cat, "mtype": mtype,
-                "selection": s["label"], "label": f"{home} v {away}: {s['label']}",
-                "model_prob": s["prob"], "market_odds_decimal": s["fair_odds"],
-            })
-    return legs
+        if b.get("confidence") == "reference":         # props are lineup-blind: never auto-parlay
+            continue
+        if want is not None and (b.get("home"), b.get("away")) not in want:
+            continue
+        market = b.get("bet_type") or b.get("category") or ""
+        sel = b.get("selection", "")
+        # fair_prob = model blended toward the sharp book price; the honest per-leg prob.
+        prob = b.get("fair_prob", b.get("model_prob"))
+        # Extra discipline where no book confirms the price: keep only part of the model's edge.
+        if (b.get("confidence") or "").startswith("model") and odds and prob is not None:
+            implied = 1.0 / odds
+            prob = implied + (prob - implied) * MODEL_ONLY_TRUST
+        out.append({
+            "home": b.get("home"), "away": b.get("away"),
+            "market": market, "mtype": market,
+            "selection": sel,
+            "label": sel if " v " in sel else f"{b.get('home')} v {b.get('away')}: {sel}",
+            "model_prob": prob,
+            "market_odds_decimal": odds,
+            # Carry the exact Kalshi ticker so the built combo is one-tap placeable across ALL
+            # markets (not just moneyline, which is all _find_market can look up by name).
+            "kalshi_ticker": b.get("ticker"),
+            "value_bet": bool(b.get("value_bet")),
+            "ev": b.get("ev_per_dollar", 0.0),
+            "edge": b.get("edge"),
+            # "high"/"medium" = a sharp sportsbook line cross-checks this; "model-only" = no book
+            # covers it, so a big model-vs-Kalshi gap is our blind spot, not confirmed value.
+            "confidence": b.get("confidence"),
+        })
+    return out
+
+
+def _is_model_only(leg: Dict) -> bool:
+    """No sportsbook cross-checks this market — the model is flying blind vs the Kalshi price."""
+    return (leg.get("confidence") or "").startswith("model")
 
 
 # 5 risk tiers -> (TARGET per-leg probability, number of legs).
@@ -88,6 +110,7 @@ _MARKET_RELIABILITY = {
     "match result": 1.00, "moneyline": 1.00, "total goals": 0.90, "total runs": 0.90,
     "double chance": 0.90, "run line": 0.85, "winning margin": 0.82, "spread": 0.82,
     "team total": 0.80, "both teams to score": 0.78, "first 5": 0.80,
+    "to advance": 0.85,
     "total corners": 0.62, "correct score": 0.55, "goalscorer": 0.50,
 }
 
@@ -100,25 +123,24 @@ def _reliability(market: str) -> float:
     return 0.75
 
 
-def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs: Optional[int] = None,
+def build_auto_parlay(legs_pool: List[Dict], style: str = "moderate safe", max_legs: Optional[int] = None,
                       bankroll: Optional[float] = None, sport: str = "soccer") -> Dict:
-    """Auto-build a parlay across the sport's parlay-eligible markets at the chosen risk tier.
-    Legs are picked near the tier's target probability, but DIVERSIFIED — one leg per game and
-    (where possible) one per market type, favouring the markets the model is most reliable on —
-    so you don't get three near-identical corner-unders. Soccer is stage-aware; MLB is not."""
+    """Auto-build a parlay from REAL, tradeable Kalshi-priced legs (see _legs_from_singles) at
+    the chosen risk tier. Legs are picked near the tier's target hit-probability, but DIVERSIFIED
+    — one leg per game and (where possible) one per market type, favouring the markets the model
+    is most reliable on — so you don't get three near-identical corner-unders. Because legs carry
+    live Kalshi odds, the payout + EV are real, not the model's own fair odds. Soccer is
+    stage-aware; MLB is not."""
     stage = _stage_for(sport)
     style = style.lower().strip()
     target, n = _resolve_tier(style, stage)
     if max_legs:
         n = max_legs
 
-    cands = []
-    for g in games:
-        cands += _candidate_legs(g["home"], g["away"], sport, stage)
-    # Player props are reference-only (lineup-blind) — never auto-build them into a parlay.
-    cands = [c for c in cands if "goalscorer" not in c["mtype"].lower()]
+    # Only legs we can actually price + trade (real Kalshi odds). Reference props already dropped.
+    cands = [c for c in legs_pool if c.get("market_odds_decimal")]
     if not cands:
-        return {"error": "no games/markets found for that day"}
+        return {"error": "no live Kalshi-priced legs for those games right now"}
 
     # Rank by closeness to the tier target, scaled by how much we trust that market.
     cands.sort(key=lambda c: abs(c["model_prob"] - target) / _reliability(c["market"]))
@@ -142,7 +164,7 @@ def build_auto_parlay(games: List[Dict], style: str = "moderate safe", max_legs:
     _fill(require_distinct_type=False)     # top up if the slate is too small to stay varied
 
     if not picked:
-        return {"error": f"no legs found for '{style}' that day"}
+        return {"error": f"no live Kalshi legs found for '{style}' that day"}
     res = evaluate_combo(picked, bankroll, sport=sport)
     res["style"] = style
     if stage:
@@ -156,43 +178,49 @@ def _legset(combo) -> frozenset:
     return frozenset((l.get("home"), l.get("away"), l.get("selection")) for l in combo)
 
 
-def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
+def build_optimal_parlay(legs_pool: List[Dict], max_legs: int = 3,
                          bankroll: Optional[float] = None,
                          exclude: Optional[set] = None, sport: str = "soccer") -> Dict:
-    """The '⭐ Best Parlay' optimizer. Builds ONLY from legs where the model genuinely beats
-    the book (real +EV value bets on the primary win market), then picks the combination with
-    the best balance of edge and hit-probability."""
+    """The '⭐ Best Parlay' optimizer. Builds ONLY from legs where the model genuinely beats the
+    live Kalshi price (real +EV value singles across ANY market — moneyline, spread, totals,
+    corners, BTTS...), then picks the combination with the best balance of edge and hit-
+    probability. One leg per game so combos stay (roughly) independent — no stacking correlated
+    legs from the same match. Legs carry real Kalshi odds, so the EV is real.
+
+    DISCIPLINE (this button actively RECOMMENDS, so it can't confidently stack unverifiable
+    edges into a fantasy parlay): a "model-only" leg sits on a market no sportsbook cross-checks,
+    so a huge model-vs-Kalshi gap there is our blind spot, not free money. We (1) drop model-only
+    legs whose edge is too-good-to-be-true, and (2) cap how many model-only legs a combo can
+    stack. Note most soccer edge IS model-only (corners/totals/BTTS aren't priced by books, and
+    the moneyline the books cover is efficiently priced) — so we allow a couple, just not a 4-leg
+    longshot pile. The manual builder + risk tiers stay fully open — there you pick and own it."""
     import itertools
     exclude = exclude or set()
-    win_market = "Moneyline" if sports.normalize(sport) == "mlb" else "Match Result"
-    value_legs = []
-    for m in matches:
-        for s in m.get("suggestions", []):
-            if s["market"] == win_market and s.get("value_bet"):
-                value_legs.append({
-                    "home": m["home"], "away": m["away"], "market": win_market,
-                    "selection": s["selection"], "label": f"{m['home']} v {m['away']}: {s['selection']}",
-                    # Use the market-SHRUNK fair prob (what we actually trust), not the raw
-                    # model prob. Multiplying raw model probs across legs compounds small
-                    # per-leg errors into fantasy EV (the old "+199% parlay" bug).
-                    "model_prob": s.get("fair_prob", s["model_prob"]),
-                    "market_odds_decimal": s["market_odds_decimal"],
-                    "ev": s["ev_per_dollar"],
-                })
+    # A model-only "value" bet this big has no book to confirm it — treat it as the model being
+    # wrong, not an edge, and keep it out of an auto-recommended combo. Then cap how many of the
+    # (survivor) model-only legs we'll stack, so the payout can't balloon on unconfirmed edges.
+    MODEL_ONLY_MAX_EV = 0.35
+    MAX_MODEL_ONLY_LEGS = 2
+
+    # Real +EV singles only. _legs_from_singles already dropped reference props + untraded legs.
+    value_legs = [l for l in legs_pool if l.get("value_bet") and l.get("market_odds_decimal")
+                  and not (_is_model_only(l) and (l.get("ev") or 0) > MODEL_ONLY_MAX_EV)]
     if not value_legs:
         return {"optimize": True, "error": "No +EV edge on this day's board — the honest move is no bet."}
 
-    value_legs.sort(key=lambda l: l["ev"], reverse=True)
+    value_legs.sort(key=lambda l: l.get("ev", 0.0), reverse=True)
     value_legs = value_legs[:14]
 
     ranked = []
     for r in range(1, min(max_legs, len(value_legs)) + 1):
         for combo in itertools.combinations(value_legs, r):
+            # One leg per game -> distinct matchups only (avoids stacking correlated same-game legs).
             if len({(l["home"], l["away"]) for l in combo}) != r:
                 continue
-            res = evaluate_combo([{k: l[k] for k in ("label", "model_prob", "market_odds_decimal",
-                                  "home", "away", "market", "selection")} for l in combo],
-                                 bankroll, sport=sport)
+            # Don't pile up unverifiable (model-only) legs into a longshot fantasy.
+            if sum(_is_model_only(l) for l in combo) > MAX_MODEL_ONLY_LEGS:
+                continue
+            res = evaluate_combo(list(combo), bankroll, sport=sport)
             if res["ev_per_dollar"] <= 0:
                 continue
             score = res["ev_per_dollar"] * (res["combined_model_prob"] ** 0.5)
@@ -215,6 +243,12 @@ def build_optimal_parlay(matches: List[Dict], max_legs: int = 3,
     if stage:
         res["stage_label"] = stage["label"]
     res["alternatives"] = [r[2] for r in fresh[1:4]]
+    n_model_only = sum(_is_model_only(l) for l in res.get("legs", []))
+    res["note"] = (res.get("note", "")
+                   + " ⭐ Optimizer discipline: skips too-good-to-be-true model-only edges and caps"
+                     " how many legs no sportsbook cross-checks."
+                   + (" All legs here are book-corroborated." if n_model_only == 0 else
+                      f" {n_model_only} leg(s) are model-only (no book confirmation) — size accordingly."))
     return res
 
 

@@ -101,6 +101,8 @@ def _evaluate(model_prob: float, price: float, book_prob: Optional[float], book_
         "book_prob": round(book_prob, 4) if book_prob is not None else None,
         "fair_prob": round(fair, 4),
         "kalshi_price_cents": round(price * 100, 1),
+        # Real tradeable decimal odds (Kalshi YES costs `price`, pays $1) for honest combo math.
+        "market_odds_decimal": round(1.0 / price, 4) if price > 0 else None,
         "edge": round(edge, 4), "ev_per_dollar": round(ev, 4),
         "value_bet": value, "tier": _tier(fair), "confidence": conf,
         "books_agree": agree, "sources": sources,

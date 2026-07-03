@@ -26,7 +26,7 @@ from app.weather_analysis import analyze_weather
 from app import weather_calibration
 from app.analysis import (analyze_match, evaluate_combo, cashout_decision,
                           monitor_live_bets, build_auto_parlay, build_optimal_parlay,
-                          next_best_tips, _legset)
+                          next_best_tips, _legset, _legs_from_singles)
 from app.soccer_model import (match_probabilities, update_after_result, MODEL_INFO,
                               extended_markets, live_leg_probability)
 from app import bet_log
@@ -123,6 +123,9 @@ class ComboLeg(BaseModel):
     away: Optional[str] = None
     market: Optional[str] = None
     selection: Optional[str] = None
+    # Exact Kalshi ticker (present for legs built from the real-priced singles) so the combo
+    # is placeable across every market, not just the moneyline that _find_market can resolve.
+    kalshi_ticker: Optional[str] = None
 
 
 class ComboRequest(BaseModel):
@@ -319,21 +322,29 @@ def combo(req: ComboRequest, request: Request):
 
 @app.post("/api/parlay/auto")
 async def parlay_auto(req: AutoParlayRequest, request: Request):
-    """Auto-build a parlay: 5 risk tiers, or 'optimize' for the best money+safety balance."""
+    """Auto-build a parlay: 5 risk tiers, or 'optimize' for the best money+safety balance.
+    Legs are priced off LIVE KALSHI odds (real, tradeable) — never the model's own fair odds —
+    so the payout + EV are honest and every leg carries a ticker for one-tap placement."""
     sport = sports.normalize(req.sport)
     # Parlays can run 2–8 legs (default 3). Clamp whatever the UI sends.
     legs = max(2, min(int(req.legs or 3), 8))
+
+    # Real-priced Kalshi singles for the requested games -> the leg pool both builders draw from.
+    if sport == "mlb":
+        from app.data_sources.kalshi_mlb import get_single_bets
+    else:
+        from app.data_sources.kalshi_single import get_single_bets
+    board = await get_matches(sport)
+    singles = await get_single_bets(board)
+    pool = _legs_from_singles(singles, req.games)
+    if not pool:
+        return {"error": "no live Kalshi-priced legs for those games right now — check back as books fill in"}
+
     if req.style.lower().strip() in ("optimize", "best"):
-        raw = await get_matches(sport)
-        scores = await get_scores(sport)
-        if scores:
-            merge_scores(raw, scores, sport)
-        names = {(g["home"], g["away"]) for g in req.games}
-        subset = [analyze_match(m, sport=sport) for m in raw if (m["home"], m["away"]) in names]
         # Skip parlays already on your slip so each request surfaces a fresh one.
         placed = {_legset(b.get("legs", [])) for b in bet_log.pending_bets(request.state.user)}
-        return build_optimal_parlay(subset, legs, exclude=placed, sport=sport)
-    return build_auto_parlay(req.games, req.style, legs, sport=sport)
+        return build_optimal_parlay(pool, legs, exclude=placed, sport=sport)
+    return build_auto_parlay(pool, req.style, legs, sport=sport)
 
 
 @app.post("/api/combo/log")

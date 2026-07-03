@@ -215,6 +215,10 @@ def _evaluate(model_prob: float, price: float, book_prob: Optional[float],
         "book_prob": round(book_prob, 4) if book_prob is not None else None,
         "fair_prob": round(fair, 4),
         "kalshi_price_cents": round(price * 100, 1),
+        # Real decimal odds for parlay math: a Kalshi YES contract costs `price` and pays $1,
+        # so decimal odds = 1/price. This is the TRADEABLE price — the combo builder uses this
+        # (not the model's 1/prob fair odds) so combined EV/payout are real, not fictional.
+        "market_odds_decimal": round(1.0 / price, 4) if price > 0 else None,
         "edge": round(edge, 4),
         "ev_per_dollar": round(ev, 4),
         "value_bet": value,

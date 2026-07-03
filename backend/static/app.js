@@ -22,7 +22,7 @@ document.querySelectorAll(".sportbtn").forEach((b) => {
     SPORT = b.dataset.sport;
     // reset per-sport caches + UI state
     comboLegs = []; renderComboLegs();
-    _coGames = []; _marketsCache = {}; _singles = [];
+    _coGames = []; _comboSingles = {}; _singles = [];
     document.getElementById("lbGame").innerHTML = `<option value="">1. choose game…</option>`;
     document.getElementById("coGame").innerHTML = `<option value="">choose game…</option>`;
     document.getElementById("singleCat").innerHTML = `<option value="">All categories</option>`;
@@ -438,23 +438,18 @@ async function toggleMarkets(btn) {
   btn.innerHTML = btn.innerHTML.replace("▾", "▴");
   const home = btn.dataset.home, away = btn.dataset.away;
   const d = await (await fetch(sp(`${API}/api/markets?team_a=${encodeURIComponent(home)}&team_b=${encodeURIComponent(away)}`))).json();
-  // Markets Kalshi lets you put in a parlay: who wins, win margin/spread, total goals, BTTS, goalscorers.
-  const kalshiParlay = (cat) => /match result|winning margin|spread|total goals|both teams|goalscorer/i.test(cat);
-  box.innerHTML = Object.entries(d.markets).map(([cat, sels]) => `
-    <div class="mk-cat">${cat} ${kalshiParlay(cat)
-      ? '<span class="kbadge ok">Kalshi parlay ✓</span>'
-      : '<span class="kbadge no">other books only</span>'}</div>
+  // These are the model's FAIR prices (odds = 1/prob), not tradeable book prices — reference
+  // only. To build a combo, use the Single Bets tab / combo builder, which carry live Kalshi odds.
+  box.innerHTML = `<div class="mk-note sub" style="padding:6px 2px;opacity:.8">📊 Model fair prices — reference only (not tradeable). Build combos from the <b>Single Bets</b> tab for real Kalshi odds.</div>`
+    + Object.entries(d.markets).map(([cat, sels]) => `
+    <div class="mk-cat">${cat}</div>
     ${sels.map((s) => `
       <div class="mk-row">
         <span>${s.label}</span>
         <span class="mk-prob">${(s.prob*100).toFixed(0)}%</span>
-        <span class="mk-odds">${s.fair_odds}</span>
-        <button class="combo-btn" data-label="${home} v ${away}: ${s.label}" data-prob="${s.prob}" data-odds="${s.fair_odds}" data-home="${home}" data-away="${away}" data-market="${cat}" data-sel="${s.label}">＋</button>
+        <span class="mk-odds" title="model fair odds (1/prob), not a book price">${s.fair_odds}</span>
       </div>`).join("")}
   `).join("");
-  box.querySelectorAll(".combo-btn").forEach((b) => {
-    b.addEventListener("click", () => addLegFromBtn(b));
-  });
 }
 
 document.getElementById("matches").addEventListener("click", (e) => {
@@ -462,37 +457,45 @@ document.getElementById("matches").addEventListener("click", (e) => {
   if (btn) toggleMarkets(btn);
 });
 
-/* ---------- guided leg builder (dropdowns) ---------- */
-let _marketsCache = {};
+/* ---------- guided leg builder (dropdowns) ----------
+   Sourced from the REAL-priced Kalshi singles (live odds + tickers), not the model's fair
+   odds — so every leg you add carries a tradeable price and can actually be placed. */
+let _comboSingles = {};   // "home|away" -> { bet_type -> [single, ...] }
 async function loadComboGames() {
   const sel = document.getElementById("lbGame");
   if (sel.options.length > 1) return; // already loaded
-  const d = await (await fetch(sp(`${API}/api/matches`))).json();
-  const up = d.matches.filter((m) => m.status !== "completed");
-  sel.innerHTML = `<option value="">1. choose game…</option>` +
-    up.map((m) => `<option data-home="${m.home}" data-away="${m.away}">${m.home} v ${m.away}</option>`).join("");
+  const d = await (await fetch(sp(`${API}/api/kalshi/singles`))).json();
+  _comboSingles = {};
+  (d.bets || []).forEach((b) => {
+    if (!(b.kalshi_price_cents > 0)) return;      // untraded -> no real price
+    if (b.confidence === "reference") return;     // props are reference-only, never a combo leg
+    const gk = `${b.home}|${b.away}`;
+    (_comboSingles[gk] = _comboSingles[gk] || {});
+    (_comboSingles[gk][b.bet_type] = _comboSingles[gk][b.bet_type] || []).push(b);
+  });
+  const games = Object.keys(_comboSingles);
+  sel.innerHTML = games.length
+    ? `<option value="">1. choose game…</option>` +
+        games.map((gk) => { const [h, a] = gk.split("|"); return `<option data-home="${h}" data-away="${a}">${h} v ${a}</option>`; }).join("")
+    : `<option value="">no live Kalshi markets right now</option>`;
 }
-document.getElementById("lbGame").addEventListener("change", async (e) => {
+document.getElementById("lbGame").addEventListener("change", (e) => {
   const opt = e.target.selectedOptions[0];
   const home = opt.dataset.home, away = opt.dataset.away;
   const mSel = document.getElementById("lbMarket"), sSel = document.getElementById("lbSel");
   sSel.innerHTML = `<option value="">3. pick…</option>`;
   if (!home) { mSel.innerHTML = `<option value="">2. market…</option>`; return; }
-  mSel.innerHTML = `<option>loading…</option>`;
-  const key = `${home}|${away}`;
-  if (!_marketsCache[key]) {
-    _marketsCache[key] = (await (await fetch(sp(`${API}/api/markets?team_a=${encodeURIComponent(home)}&team_b=${encodeURIComponent(away)}`))).json()).markets;
-  }
   mSel.dataset.home = home; mSel.dataset.away = away;
+  const markets = _comboSingles[`${home}|${away}`] || {};
   mSel.innerHTML = `<option value="">2. market…</option>` +
-    Object.keys(_marketsCache[key]).map((c) => `<option>${c}</option>`).join("");
+    Object.keys(markets).map((c) => `<option>${c}</option>`).join("");
 });
 document.getElementById("lbMarket").addEventListener("change", (e) => {
   const cat = e.target.value, home = e.target.dataset.home, away = e.target.dataset.away;
   const sSel = document.getElementById("lbSel");
-  const sels = (_marketsCache[`${home}|${away}`] || {})[cat] || [];
+  const sels = (_comboSingles[`${home}|${away}`] || {})[cat] || [];
   sSel.innerHTML = `<option value="">3. pick…</option>` +
-    sels.map((s, i) => `<option value="${i}">${s.label} — ${(s.prob*100).toFixed(0)}% (odds ${s.fair_odds})</option>`).join("");
+    sels.map((s, i) => `<option value="${i}">${s.selection} — ${s.kalshi_price_cents}¢ · model ${(s.fair_prob*100).toFixed(0)}%${s.value_bet ? " ★" : ""}</option>`).join("");
 });
 document.getElementById("lbAdd").addEventListener("click", () => {
   const gOpt = document.getElementById("lbGame").selectedOptions[0];
@@ -500,21 +503,28 @@ document.getElementById("lbAdd").addEventListener("click", () => {
   const cat = document.getElementById("lbMarket").value;
   const sIdx = document.getElementById("lbSel").value;
   if (!home || !cat || sIdx === "") return alert("Pick a game, a market, and a selection first.");
-  const s = _marketsCache[`${home}|${away}`][cat][parseInt(sIdx)];
-  addComboLeg(`${home} v ${away}: ${s.label}`, s.prob, s.fair_odds, home, away, cat, s.label);
+  addComboLegFromSingle(_comboSingles[`${home}|${away}`][cat][parseInt(sIdx)]);
 });
 
 /* ---------- combo builder ---------- */
 function addLegFromBtn(b) {
   const d = b.dataset;
-  addComboLeg(d.label, parseFloat(d.prob), parseFloat(d.odds), d.home, d.away, d.market, d.sel);
+  addComboLeg(d.label, parseFloat(d.prob), parseFloat(d.odds), d.home, d.away, d.market, d.sel, d.ticker || null);
 }
-function addComboLeg(label, prob, odds, home, away, market, selection) {
+function addComboLeg(label, prob, odds, home, away, market, selection, ticker) {
   comboLegs.push({ label, model_prob: prob, market_odds_decimal: odds,
-    home: home || null, away: away || null, market: market || null, selection: selection || null });
+    home: home || null, away: away || null, market: market || null, selection: selection || null,
+    // Real Kalshi ticker (from the singles board) so the combo can actually be placed.
+    kalshi_ticker: ticker || null });
   renderComboLegs();
   // jump to combo tab
   document.querySelector('.tab[data-tab="combo"]').click();
+}
+// Build a combo leg from a real-priced Kalshi single (tradeable odds + ticker).
+function addComboLegFromSingle(b) {
+  const label = (b.selection || "").includes(" v ") ? b.selection : `${b.home} v ${b.away}: ${b.selection}`;
+  const odds = b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99;
+  addComboLeg(label, b.fair_prob, odds, b.home, b.away, b.bet_type, b.selection, b.ticker);
 }
 function renderComboLegs() {
   const wrap = document.getElementById("comboLegs");
@@ -690,6 +700,8 @@ function renderSingles() {
     if (el) el.onclick = () => placeSingle(b);
     const rb = document.getElementById(`research-btn-${b.ticker}`);
     if (rb) rb.onclick = () => researchSingle(b);
+    const cb = document.getElementById(`combo-${b.ticker}`);
+    if (cb) cb.onclick = () => addComboLegFromSingle(b);
   });
 }
 
@@ -735,6 +747,7 @@ function singleCard(b) {
         ${confBadge(b)}
         <div style="display:flex;gap:6px">
           <button id="research-btn-${b.ticker}" class="btn" title="Recent news + injury check">🔎 Research</button>
+          <button id="combo-${b.ticker}" class="btn" title="Add to combo builder (real Kalshi odds)">＋ combo</button>
           <button id="place-${b.ticker}" class="btn ${b.value_bet?'primary':''}">Place / paper</button>
         </div>
       </div>
