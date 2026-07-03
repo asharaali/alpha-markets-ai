@@ -102,10 +102,10 @@
     <!-- CRYPTO 15-MIN -->
     <section id="crypto" class="panel">
       <h2>🪙 Crypto — 15-minute markets</h2>
-      <p class="muted">Kalshi's 15-minute BTC &amp; ETH binaries — "will the coin be at/above the target at the mark?" — priced live by a driftless option model (current spot + volatility estimated from recent price action) against the real Kalshi price. Model % vs price = the edge. Bet <b>up</b> (≥ target) or <b>down</b> (&lt; target). These expire in minutes, so the board refreshes on its own.</p>
+      <p class="muted">Kalshi's 15-minute BTC &amp; ETH binaries. For each window I read the recent price action into an <b>UP / DOWN chart signal</b>, price the "will it close ≥ target?" binary (spot + live volatility + a capped momentum drift), compare to the real Kalshi price, and <b>tell you what to place — buy UP, buy DOWN, or PASS</b>. ⚠️ 15-min direction is mostly noise: treat picks as a lean, not a lock. Board refreshes every 10s.</p>
       <div class="singles-controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
         <select id="cryptoCoin"><option value="">BTC + ETH</option><option value="BTC">BTC</option><option value="ETH">ETH</option></select>
-        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">value only
+        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">picks only
           <input type="checkbox" id="cryptoValueOnly"></label>
         <input id="cryptoAmount" type="number" placeholder="$ amount" value="10" style="width:90px">
         <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">

@@ -28,7 +28,7 @@ _SIGMA_FLOOR = 0.15          # never treat the market as calmer than ~15% annual
 _SIGMA_CAP = 3.0
 _FALLBACK_SIGMA = 0.55       # if candles are missing, a sane BTC/ETH-ish annual vol
 
-_CACHE: Dict[str, Tuple[float, float, float]] = {}   # coin -> (ts, spot, sigma_annual)
+_CACHE: Dict[str, Tuple[float, Dict]] = {}   # coin -> (ts, market_state)
 _TTL = 8.0
 
 
@@ -46,7 +46,14 @@ def _annualized_vol(closes) -> float:
     return min(_SIGMA_CAP, max(_SIGMA_FLOOR, sigma_annual))
 
 
-async def _fetch(client: httpx.AsyncClient, product: str) -> Tuple[float, float]:
+def _ret(closes, n: int) -> float:
+    """Log return over the last n minutes (closes are newest-first)."""
+    if len(closes) <= n or closes[n] <= 0 or closes[0] <= 0:
+        return 0.0
+    return math.log(closes[0] / closes[n])
+
+
+async def _fetch(client: httpx.AsyncClient, product: str) -> Dict:
     t = await client.get(f"{_CB}/products/{product}/ticker")
     spot = float(t.json()["price"])
     cd = await client.get(f"{_CB}/products/{product}/candles", params={"granularity": 60})
@@ -54,26 +61,33 @@ async def _fetch(client: httpx.AsyncClient, product: str) -> Tuple[float, float]
     # Coinbase candle = [time, low, high, open, close, volume]; sort newest-first, take last hour.
     candles = sorted(candles, key=lambda c: c[0], reverse=True)[:60]
     closes = [c[4] for c in candles]
-    sigma = _annualized_vol(closes) if closes else _FALLBACK_SIGMA
-    return spot, sigma
+    return {
+        "spot": spot,
+        "sigma_annual": _annualized_vol(closes) if closes else _FALLBACK_SIGMA,
+        # Recent momentum (log returns) for the directional read.
+        "ret_3m": _ret(closes, 3),
+        "ret_5m": _ret(closes, 5),
+        "ret_15m": _ret(closes, 15),
+        "n_candles": len(closes),
+    }
 
 
-async def get_spot_vol(coin: str, client: Optional[httpx.AsyncClient] = None) -> Tuple[float, float]:
-    """(spot, sigma_annual) for a coin, cached ~8s. Raises if the coin isn't supported."""
+async def get_market_state(coin: str, client: Optional[httpx.AsyncClient] = None) -> Dict:
+    """Live {spot, sigma_annual, ret_3m/5m/15m, n_candles} for a coin, cached ~8s."""
     coin = coin.upper()
     if coin not in PRODUCTS:
         raise ValueError(f"unsupported coin {coin}")
     now = time.time()
     cached = _CACHE.get(coin)
     if cached and now - cached[0] < _TTL:
-        return cached[1], cached[2]
+        return cached[1]
     own = client is None
     if own:
         client = httpx.AsyncClient(timeout=12, headers=_UA)
     try:
-        spot, sigma = await _fetch(client, PRODUCTS[coin])
-        _CACHE[coin] = (now, spot, sigma)
-        return spot, sigma
+        state = await _fetch(client, PRODUCTS[coin])
+        _CACHE[coin] = (now, state)
+        return state
     finally:
         if own:
             await client.aclose()

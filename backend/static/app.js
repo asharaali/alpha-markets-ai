@@ -808,21 +808,21 @@ async function loadCrypto() {
   try {
     const d = await (await fetch(`${API}/api/crypto${coin ? `?coin=${coin}` : ""}`)).json();
     _cryptoData = d.markets || [];
-    document.getElementById("cryptoAuto").textContent = `· auto-refresh 10s · ${d.value_count || 0} value`;
+    document.getElementById("cryptoAuto").textContent = `· auto-refresh 10s · ${d.pick_count || 0} actionable`;
     renderCrypto();
   } catch (e) {
     if (!_cryptoData.length) wrap.innerHTML = `<div class="empty">Couldn't load crypto markets.</div>`;
   }
 }
 function renderCrypto() {
-  const valueOnly = document.getElementById("cryptoValueOnly").checked;
-  const rows = _cryptoData.filter((b) => !valueOnly || b.value_bet);
+  const picksOnly = document.getElementById("cryptoValueOnly").checked;
+  const rows = _cryptoData.filter((b) => !picksOnly || b.has_pick);
   const wrap = document.getElementById("cryptoList");
   if (!rows.length) { wrap.innerHTML = `<div class="empty">No open 15-min markets match right now — a fresh window opens every 15 minutes.</div>`; return; }
   wrap.innerHTML = rows.map(cryptoCard).join("");
   rows.forEach((b) => {
-    const el = document.getElementById(`cplace-${_rowId(b)}`);
-    if (el) el.onclick = () => placeCrypto(b);
+    const el = document.getElementById(`cplace-${_safeId(b.ticker)}`);
+    if (el && b.has_pick) el.onclick = () => placeCrypto(b);
   });
 }
 function fmtCountdown(secs) {
@@ -830,27 +830,45 @@ function fmtCountdown(secs) {
   const m = Math.floor(secs / 60), s = secs % 60;
   return `${m}m ${String(s).padStart(2, "0")}s`;
 }
+function sideRow(coin, s, on) {
+  return `<div class="sugg-row" style="${on ? 'font-weight:600' : 'opacity:.6'}">
+    <span class="name">${on ? "➡ " : ""}${s.selection}</span>
+    <span class="odds">${s.kalshi_price_cents}¢ <small>model ${(s.model_prob * 100).toFixed(0)}%</small></span>
+    <span class="ev ${s.ev_per_dollar > 0 ? 'pos' : 'neg'}">${s.ev_per_dollar > 0 ? "+" : ""}${(s.ev_per_dollar * 100).toFixed(0)}%</span>
+  </div>`;
+}
 function cryptoCard(b) {
-  const uid = _rowId(b);
-  const dir = b.side === "yes" ? "▲ UP (≥ target)" : "▼ DOWN (< target)";
-  const star = b.value_bet ? `<span class="star">★ VALUE</span>` : "";
+  const id = _safeId(b.ticker);
   const closeMs = b.close_time ? new Date(b.close_time).getTime() : 0;
-  return `<div class="card ${b.value_bet ? "" : "dim"}">
+  const sig = b.signal || { direction: "flat", strength: 0, note: "" };
+  const sigColor = sig.direction === "up" ? "var(--green)" : sig.direction === "down" ? "var(--red)" : "var(--muted)";
+  const sigArrow = sig.direction === "up" ? "▲" : sig.direction === "down" ? "▼" : "▬";
+  const bars = "█".repeat(Math.round(sig.strength * 5)) + "░".repeat(5 - Math.round(sig.strength * 5));
+  const p = b.pick || { side: null };
+  // The recommendation banner: what to place, or sit out.
+  let rec;
+  if (p.side) {
+    const cc = p.confidence === "high" ? "var(--green)" : p.confidence === "medium" ? "var(--amber)" : "var(--muted)";
+    rec = `<div class="action-line" style="color:${cc}">${p.action} — ${p.confidence.toUpperCase()} confidence · +${(p.ev_per_dollar * 100).toFixed(0)}% EV</div>
+      <p class="sub" style="margin:4px 0 8px">${p.reason}</p>
+      <button id="cplace-${id}" class="btn primary">Place the pick (buy ${p.side.toUpperCase()}) — paper unless LIVE checked</button>`;
+  } else {
+    rec = `<div class="action-line" style="color:var(--muted)">↔ PASS — no edge</div>
+      <p class="sub" style="margin:4px 0 8px">${(b.pick && b.pick.reason) || "Fairly priced."}</p>`;
+  }
+  return `<div class="card ${p.side ? "" : "dim"}">
     <div class="card-head">
-      <div class="teams">${b.selection} ${star}</div>
-      <div class="meta">${b.coin} 15-min · ${dir}</div>
+      <div><div class="teams">${b.coin} · target $${Number(b.strike).toLocaleString()}</div>
+        <div class="meta">spot $${Number(b.spot).toLocaleString()} · vol ${(b.sigma_annual * 100).toFixed(0)}% · <span class="cd" data-close="${closeMs}">⏱ ${fmtCountdown(b.seconds_to_close)}</span></div></div>
+      <div style="text-align:right;color:${sigColor}"><b>${sigArrow} ${sig.direction.toUpperCase()}</b><div class="sub" style="color:${sigColor}">${bars}</div></div>
     </div>
+    <div class="marketline" style="margin:6px 0">📈 chart read: ${sig.note}</div>
     <div class="sugg">
-      <div class="sugg-row">
-        <span class="name">spot $${Number(b.spot).toLocaleString()} <small>vol ${(b.sigma_annual * 100).toFixed(0)}%</small></span>
-        <span class="odds">${b.kalshi_price_cents}¢ <small>model ${(b.model_prob * 100).toFixed(0)}%</small></span>
-        <span class="ev ${b.ev_per_dollar > 0 ? 'pos' : 'neg'}">${b.ev_per_dollar > 0 ? "+" : ""}${(b.ev_per_dollar * 100).toFixed(0)}%</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px">
-        <span class="sub cd" data-close="${closeMs}">⏱ ${fmtCountdown(b.seconds_to_close)}</span>
-        <button id="cplace-${uid}" class="btn ${b.value_bet ? 'primary' : ''}">Place / paper (buy ${b.side.toUpperCase()})</button>
-      </div>
-    </div></div>`;
+      ${sideRow(b.coin, b.yes, p.side === "yes")}
+      ${sideRow(b.coin, b.no, p.side === "no")}
+    </div>
+    <div style="margin-top:10px">${rec}</div>
+  </div>`;
 }
 function tickCrypto() {
   document.querySelectorAll("#cryptoList .cd").forEach((el) => {
@@ -859,27 +877,29 @@ function tickCrypto() {
   });
 }
 async function placeCrypto(b) {
+  const p = b.pick;
+  if (!p || !p.side) return;
   const amount = parseFloat(document.getElementById("cryptoAmount").value) || 0;
   if (amount <= 0) return alert("Enter an amount first.");
   const live = document.getElementById("cryptoLive").checked;
-  if (live && !confirm(`Place ${b.selection} (buy ${b.side.toUpperCase()}) LIVE on Kalshi for $${amount} of REAL money?`)) return;
-  const odds = b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99;
+  if (live && !confirm(`Place ${p.selection} (buy ${p.side.toUpperCase()}) LIVE on Kalshi for $${amount} of REAL money?`)) return;
+  const odds = p.price_cents > 0 ? 100 / p.price_cents : 99;
   const combo = { legs: [{
-    label: b.selection, model_prob: b.model_prob, market_odds_decimal: odds,
-    home: b.coin, away: "15-min", market: b.bet_type, selection: b.selection,
-    kalshi_ticker: b.ticker, side: b.side,
-  }], leg_count: 1, combined_model_prob: b.model_prob, sport: "crypto",
+    label: p.selection, model_prob: p.model_prob, market_odds_decimal: odds,
+    home: b.coin, away: "15-min", market: b.bet_type, selection: p.selection,
+    kalshi_ticker: b.ticker, side: p.side,
+  }], leg_count: 1, combined_model_prob: p.model_prob, sport: "crypto",
     combined_odds_decimal: odds, payout_multiple: odds };
-  const btn = document.getElementById(`cplace-${_rowId(b)}`);
+  const btn = document.getElementById(`cplace-${_safeId(b.ticker)}`);
   btn.disabled = true; btn.textContent = "Placing…";
   try {
     const r = await (await fetch(`${API}/api/combo/place`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ combo, amount, mode: live ? "live" : "paper", book: "Kalshi" }),
     })).json();
-    if (r.error) { alert(r.error); btn.disabled = false; btn.textContent = "Place / paper"; return; }
+    if (r.error) { alert(r.error); btn.disabled = false; btn.textContent = "Place the pick"; return; }
     btn.textContent = r.mode === "live" ? "✓ Placed LIVE" : "✓ Placed (paper)";
-  } catch (e) { alert("Couldn't place: " + e); btn.disabled = false; btn.textContent = "Place / paper"; }
+  } catch (e) { alert("Couldn't place: " + e); btn.disabled = false; btn.textContent = "Place the pick"; }
 }
 document.getElementById("cryptoCoin").addEventListener("change", loadCrypto);
 document.getElementById("cryptoValueOnly").addEventListener("change", renderCrypto);

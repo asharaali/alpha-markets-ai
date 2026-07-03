@@ -295,7 +295,7 @@ async def crypto(coin: Optional[str] = None):
     (up/down) with edge, EV, value flag, and seconds-to-close. Place via /api/combo/place."""
     from app.data_sources.kalshi_crypto import get_crypto_markets, SERIES
     markets = await get_crypto_markets(coin)
-    return {"count": len(markets), "value_count": sum(b["value_bet"] for b in markets),
+    return {"count": len(markets), "pick_count": sum(b["has_pick"] for b in markets),
             "coins": sorted(set(SERIES.values())), "markets": markets}
 
 
