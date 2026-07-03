@@ -288,6 +288,17 @@ async def kalshi_singles(category: Optional[str] = None, sport: Optional[str] = 
             "value_count": sum(b["value_bet"] for b in bets), "bets": bets}
 
 
+@app.get("/api/crypto")
+async def crypto(coin: Optional[str] = None):
+    """Live Kalshi 15-minute crypto markets (BTC, ETH), each priced by the driftless-GBM binary-
+    option model (current spot + live volatility) against the real Kalshi price. Both sides
+    (up/down) with edge, EV, value flag, and seconds-to-close. Place via /api/combo/place."""
+    from app.data_sources.kalshi_crypto import get_crypto_markets, SERIES
+    markets = await get_crypto_markets(coin)
+    return {"count": len(markets), "value_count": sum(b["value_bet"] for b in markets),
+            "coins": sorted(set(SERIES.values())), "markets": markets}
+
+
 @app.get("/api/research")
 async def research_bet(home: str, away: str, player: Optional[str] = None):
     """

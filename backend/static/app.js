@@ -49,8 +49,10 @@ document.querySelectorAll(".tab").forEach((t) => {
     document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
     t.classList.add("active");
     document.getElementById(t.dataset.tab).classList.add("active");
+    if (typeof stopCrypto === "function") stopCrypto();   // pause crypto auto-refresh off-tab
     if (t.dataset.tab === "kalshi") loadKalshi();
     if (t.dataset.tab === "singles") loadSingles();
+    if (t.dataset.tab === "crypto") startCrypto();
     if (t.dataset.tab === "record") loadRecord();
     if (t.dataset.tab === "autobet") loadAutobet();
     if (t.dataset.tab === "combo") loadComboGames();
@@ -789,6 +791,99 @@ async function placeSingle(b) {
 document.getElementById("singleCat").addEventListener("change", renderSingles);
 document.getElementById("singleValueOnly").addEventListener("change", renderSingles);
 document.getElementById("singleRefresh").addEventListener("click", loadSingles);
+
+/* ---------- Crypto 15-min ---------- */
+let _cryptoData = [], _cryptoPoll = null, _cryptoTick = null;
+function startCrypto() {
+  loadCrypto();
+  clearInterval(_cryptoPoll); clearInterval(_cryptoTick);
+  _cryptoPoll = setInterval(loadCrypto, 10000);   // fresh spot + prices every 10s
+  _cryptoTick = setInterval(tickCrypto, 1000);    // live countdown between refreshes
+}
+function stopCrypto() { clearInterval(_cryptoPoll); clearInterval(_cryptoTick); _cryptoPoll = _cryptoTick = null; }
+
+async function loadCrypto() {
+  const wrap = document.getElementById("cryptoList");
+  const coin = document.getElementById("cryptoCoin").value;
+  try {
+    const d = await (await fetch(`${API}/api/crypto${coin ? `?coin=${coin}` : ""}`)).json();
+    _cryptoData = d.markets || [];
+    document.getElementById("cryptoAuto").textContent = `· auto-refresh 10s · ${d.value_count || 0} value`;
+    renderCrypto();
+  } catch (e) {
+    if (!_cryptoData.length) wrap.innerHTML = `<div class="empty">Couldn't load crypto markets.</div>`;
+  }
+}
+function renderCrypto() {
+  const valueOnly = document.getElementById("cryptoValueOnly").checked;
+  const rows = _cryptoData.filter((b) => !valueOnly || b.value_bet);
+  const wrap = document.getElementById("cryptoList");
+  if (!rows.length) { wrap.innerHTML = `<div class="empty">No open 15-min markets match right now — a fresh window opens every 15 minutes.</div>`; return; }
+  wrap.innerHTML = rows.map(cryptoCard).join("");
+  rows.forEach((b) => {
+    const el = document.getElementById(`cplace-${_rowId(b)}`);
+    if (el) el.onclick = () => placeCrypto(b);
+  });
+}
+function fmtCountdown(secs) {
+  if (secs <= 0) return "closed";
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+function cryptoCard(b) {
+  const uid = _rowId(b);
+  const dir = b.side === "yes" ? "▲ UP (≥ target)" : "▼ DOWN (< target)";
+  const star = b.value_bet ? `<span class="star">★ VALUE</span>` : "";
+  const closeMs = b.close_time ? new Date(b.close_time).getTime() : 0;
+  return `<div class="card ${b.value_bet ? "" : "dim"}">
+    <div class="card-head">
+      <div class="teams">${b.selection} ${star}</div>
+      <div class="meta">${b.coin} 15-min · ${dir}</div>
+    </div>
+    <div class="sugg">
+      <div class="sugg-row">
+        <span class="name">spot $${Number(b.spot).toLocaleString()} <small>vol ${(b.sigma_annual * 100).toFixed(0)}%</small></span>
+        <span class="odds">${b.kalshi_price_cents}¢ <small>model ${(b.model_prob * 100).toFixed(0)}%</small></span>
+        <span class="ev ${b.ev_per_dollar > 0 ? 'pos' : 'neg'}">${b.ev_per_dollar > 0 ? "+" : ""}${(b.ev_per_dollar * 100).toFixed(0)}%</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px">
+        <span class="sub cd" data-close="${closeMs}">⏱ ${fmtCountdown(b.seconds_to_close)}</span>
+        <button id="cplace-${uid}" class="btn ${b.value_bet ? 'primary' : ''}">Place / paper (buy ${b.side.toUpperCase()})</button>
+      </div>
+    </div></div>`;
+}
+function tickCrypto() {
+  document.querySelectorAll("#cryptoList .cd").forEach((el) => {
+    const closeMs = parseInt(el.dataset.close, 10) || 0;
+    el.textContent = `⏱ ${fmtCountdown(Math.round((closeMs - Date.now()) / 1000))}`;
+  });
+}
+async function placeCrypto(b) {
+  const amount = parseFloat(document.getElementById("cryptoAmount").value) || 0;
+  if (amount <= 0) return alert("Enter an amount first.");
+  const live = document.getElementById("cryptoLive").checked;
+  if (live && !confirm(`Place ${b.selection} (buy ${b.side.toUpperCase()}) LIVE on Kalshi for $${amount} of REAL money?`)) return;
+  const odds = b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99;
+  const combo = { legs: [{
+    label: b.selection, model_prob: b.model_prob, market_odds_decimal: odds,
+    home: b.coin, away: "15-min", market: b.bet_type, selection: b.selection,
+    kalshi_ticker: b.ticker, side: b.side,
+  }], leg_count: 1, combined_model_prob: b.model_prob, sport: "crypto",
+    combined_odds_decimal: odds, payout_multiple: odds };
+  const btn = document.getElementById(`cplace-${_rowId(b)}`);
+  btn.disabled = true; btn.textContent = "Placing…";
+  try {
+    const r = await (await fetch(`${API}/api/combo/place`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ combo, amount, mode: live ? "live" : "paper", book: "Kalshi" }),
+    })).json();
+    if (r.error) { alert(r.error); btn.disabled = false; btn.textContent = "Place / paper"; return; }
+    btn.textContent = r.mode === "live" ? "✓ Placed LIVE" : "✓ Placed (paper)";
+  } catch (e) { alert("Couldn't place: " + e); btn.disabled = false; btn.textContent = "Place / paper"; }
+}
+document.getElementById("cryptoCoin").addEventListener("change", loadCrypto);
+document.getElementById("cryptoValueOnly").addEventListener("change", renderCrypto);
+document.getElementById("cryptoRefresh").addEventListener("click", loadCrypto);
 
 /* ---------- Record / learning ---------- */
 let recordPoll = null;

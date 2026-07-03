@@ -48,6 +48,7 @@
     <button class="tab active" data-tab="dashboard">Live Board</button>
     <button class="tab" data-tab="kalshi">Kalshi</button>
     <button class="tab" data-tab="singles">🎯 Single Bets</button>
+    <button class="tab" data-tab="crypto">🪙 Crypto 15m</button>
     <button class="tab" data-tab="combo">Combo Builder</button>
     <button class="tab" data-tab="cashout">Cash-Out Checker</button>
     <button class="tab" data-tab="record">My Record</button>
@@ -96,6 +97,23 @@
         <button id="singleRefresh" class="btn">↻ Refresh</button>
       </div>
       <div id="singlesList" class="matches"></div>
+    </section>
+
+    <!-- CRYPTO 15-MIN -->
+    <section id="crypto" class="panel">
+      <h2>🪙 Crypto — 15-minute markets</h2>
+      <p class="muted">Kalshi's 15-minute BTC &amp; ETH binaries — "will the coin be at/above the target at the mark?" — priced live by a driftless option model (current spot + volatility estimated from recent price action) against the real Kalshi price. Model % vs price = the edge. Bet <b>up</b> (≥ target) or <b>down</b> (&lt; target). These expire in minutes, so the board refreshes on its own.</p>
+      <div class="singles-controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <select id="cryptoCoin"><option value="">BTC + ETH</option><option value="BTC">BTC</option><option value="ETH">ETH</option></select>
+        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">value only
+          <input type="checkbox" id="cryptoValueOnly"></label>
+        <input id="cryptoAmount" type="number" placeholder="$ amount" value="10" style="width:90px">
+        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">
+          <input type="checkbox" id="cryptoLive"> LIVE (real money)</label>
+        <button id="cryptoRefresh" class="btn">↻ Refresh</button>
+        <span id="cryptoAuto" class="sub" style="opacity:.7"></span>
+      </div>
+      <div id="cryptoList" class="matches"></div>
     </section>
 
     <!-- COMBO BUILDER -->

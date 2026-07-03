@@ -527,6 +527,11 @@ def monitor_live_bets(scores: List[Dict], user: str, sport: str = "soccer") -> L
 
     out = []
     for b in bet_log.pending_bets(user):
+        # Crypto 15-min bets settle automatically on Kalshi in minutes — they carry no live
+        # game feed, so the sports monitor must never try to track them (normalize would
+        # otherwise fold the unknown 'crypto' sport into 'soccer' and mis-handle them).
+        if b.get("sport") == "crypto":
+            continue
         if sports.normalize(b.get("sport", "soccer")) != sport:
             continue
         legs = b.get("legs", [])
