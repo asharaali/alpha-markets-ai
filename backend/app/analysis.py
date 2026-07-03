@@ -11,6 +11,7 @@ behaviour and URLs are unchanged.
 """
 from __future__ import annotations
 from typing import Dict, List, Optional
+import random
 
 from app import probability as P
 from app import sports
@@ -67,6 +68,8 @@ def _legs_from_singles(singles: List[Dict], games: Optional[List[Dict]] = None) 
             # Carry the exact Kalshi ticker so the built combo is one-tap placeable across ALL
             # markets (not just moneyline, which is all _find_market can look up by name).
             "kalshi_ticker": b.get("ticker"),
+            "side": b.get("side", "yes"),          # buy YES, or buy NO (e.g. "BTTS No")
+
             "value_bet": bool(b.get("value_bet")),
             "ev": b.get("ev_per_dollar", 0.0),
             "edge": b.get("edge"),
@@ -138,12 +141,19 @@ def build_auto_parlay(legs_pool: List[Dict], style: str = "moderate safe", max_l
         n = max_legs
 
     # Only legs we can actually price + trade (real Kalshi odds). Reference props already dropped.
-    cands = [c for c in legs_pool if c.get("market_odds_decimal")]
+    # Drop degenerate near-locks (decimal odds < 1.13 ≈ >88% implied, e.g. "Over 0.5 goals"):
+    # they pay almost nothing, add no real edge, and just make every parlay look the same.
+    cands = [c for c in legs_pool
+             if c.get("market_odds_decimal") and c["market_odds_decimal"] >= 1.13]
     if not cands:
         return {"error": "no live Kalshi-priced legs for those games right now"}
 
-    # Rank by closeness to the tier target, scaled by how much we trust that market.
+    # Rank by closeness to the tier target, scaled by how much we trust that market, then take a
+    # SHORTLIST of the best-fitting legs and shuffle it — so re-clicking a tier surfaces a fresh
+    # parlay drawn from the legs that fit that risk level, not the same three every single time.
     cands.sort(key=lambda c: abs(c["model_prob"] - target) / _reliability(c["market"]))
+    cands = cands[: max(n * 4, 12)]
+    random.shuffle(cands)
 
     def _fill(distinct_type: bool, distinct_game: bool):
         used_games = {(l["home"], l["away"]) for l in picked}

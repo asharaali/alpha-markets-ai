@@ -56,6 +56,19 @@ _CACHE_TTL = 90
 # not an edge (same discipline as the MLB player props).
 _REFERENCE_SERIES = {"KXWCGOAL"}
 
+# Markets where the complementary "No" is a natural standalone pick: Kalshi lists a single
+# binary market (YES = the event), so betting the other side means BUYING NO on the same ticker.
+# For these we surface BOTH sides so you can actually pick e.g. "BTTS No".
+_TWO_SIDED = {"KXWCBTTS"}
+
+
+def _no_side_label(series: str, yes_prob: float, yes_label: str) -> Tuple[float, str]:
+    """(model prob, label) for the NO side of a two-sided market. Prob = complement; the caller
+    prices it as 1 - yes_price and places it by BUYING NO on the same ticker."""
+    if series == "KXWCBTTS":
+        return 1.0 - yes_prob, yes_label.replace("BTTS Yes", "BTTS No")
+    return 1.0 - yes_prob, f"{yes_label} (No)"
+
 
 def _canon(name: str) -> str:
     return KALSHI_NAME_MAP.get((name or "").strip(), (name or "").strip())
@@ -136,8 +149,10 @@ def _model_prob_for(series: str, sub: str, lk: Dict) -> Tuple[Optional[float], s
         return lk["totals"].get(key), f"{home} v {away}: {key} goals"
 
     if series == "KXWCBTTS":
-        yes = "yes" in s.lower()
-        return lk["btts"].get("BTTS: Yes" if yes else "BTTS: No"), f"{home} v {away}: BTTS {'Yes' if yes else 'No'}"
+        # Kalshi lists ONE BTTS market; its YES contract = both teams score (yes_sub_title is
+        # "Reg Time: Both Teams To Score", which has no "yes"/"no" token). So the YES side is
+        # always "BTTS Yes"; the "No" side is offered separately as a buy-NO in the assembler.
+        return lk["btts"].get("BTTS: Yes"), f"{home} v {away}: BTTS Yes"
 
     if series == "KXWCCORNERS":                     # 'N+ corners'
         m = re.search(r"(\d+)\+", s)
@@ -329,23 +344,31 @@ async def get_single_bets(board: Optional[List[Dict]] = None) -> List[Dict]:
         cat, bet_type = SERIES[series]
 
         for m in (e.get("markets") or []):
-            price = prices.get(m.get("ticker"))
-            if price is None:
+            yes_price = prices.get(m.get("ticker"))
+            if yes_price is None:
                 continue   # untraded -> no live price to evaluate honestly
             mp, label = _model_prob_for(series, m.get("yes_sub_title", ""), lk)
             if mp is None:
                 continue
-            book_prob = _book_prob_for(series, label, lk, cons)
-            ev = _evaluate(mp, price, book_prob, cons["n"] if cons else 0)
-            if series in _REFERENCE_SERIES:          # player props: reference-only, never a value flag
-                ev["value_bet"] = False
-                ev["confidence"] = "reference"
-                ev["sources"] = "model rate — not lineup/penalty-taker/injury adjusted (reference only)"
-            out.append({
-                "ticker": m.get("ticker"), "category": cat, "bet_type": bet_type,
-                "home": home, "away": away, "selection": label,
-                "event_title": e.get("title"), **ev,
-            })
+            # Buy-YES side, plus the buy-NO side for two-sided markets (e.g. BTTS No).
+            sides = [("yes", mp, yes_price, label)]
+            if series in _TWO_SIDED:
+                no_prob, no_label = _no_side_label(series, mp, label)
+                sides.append(("no", no_prob, 1.0 - yes_price, no_label))
+            for side, p_model, p_price, lbl in sides:
+                if not (0.0 < p_price < 1.0):
+                    continue                          # no tradeable price on this side
+                book_prob = _book_prob_for(series, lbl, lk, cons)
+                ev = _evaluate(p_model, p_price, book_prob, cons["n"] if cons else 0)
+                if series in _REFERENCE_SERIES:       # player props: reference-only, never a value flag
+                    ev["value_bet"] = False
+                    ev["confidence"] = "reference"
+                    ev["sources"] = "model rate — not lineup/penalty-taker/injury adjusted (reference only)"
+                out.append({
+                    "ticker": m.get("ticker"), "side": side, "category": cat, "bet_type": bet_type,
+                    "home": home, "away": away, "selection": lbl,
+                    "event_title": e.get("title"), **ev,
+                })
 
     # Best value first, but keep everything browsable.
     out.sort(key=lambda b: (b["value_bet"], b["ev_per_dollar"]), reverse=True)

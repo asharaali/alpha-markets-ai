@@ -126,6 +126,8 @@ class ComboLeg(BaseModel):
     # Exact Kalshi ticker (present for legs built from the real-priced singles) so the combo
     # is placeable across every market, not just the moneyline that _find_market can resolve.
     kalshi_ticker: Optional[str] = None
+    # Which side of the ticker to buy: "yes" (default) or "no" (e.g. a "BTTS No" leg).
+    side: Optional[str] = "yes"
 
 
 class ComboRequest(BaseModel):
@@ -404,9 +406,10 @@ async def combo_place(req: PlaceComboRequest, request: Request):
     for lg in legs:
         leg = dict(lg)
         preset_ticker = lg.get("kalshi_ticker")    # single bets arrive with their exact ticker
+        side = (lg.get("side") or "yes").lower()   # buy YES, or NO for a "…No" leg (e.g. BTTS No)
         if go_live:
             from app.kalshi_trade import place_leg_detailed, place_ticker_detailed
-            r = (await place_ticker_detailed(preset_ticker, per_leg) if preset_ticker
+            r = (await place_ticker_detailed(preset_ticker, per_leg, side) if preset_ticker
                  else await place_leg_detailed(lg["home"], lg["away"], lg["selection"], per_leg))
             leg["kalshi_ticker"] = r.get("ticker") or preset_ticker
             leg["kalshi_entry"] = r.get("entry_price")

@@ -172,19 +172,23 @@ async def place_leg_detailed(home: str, away: str, selection: str, stake_dollars
             "entry_price": round(cost, 4), "count": int(stake_dollars / cost)}
 
 
-async def place_ticker_detailed(ticker: str, stake_dollars: float):
-    """Buy YES on a specific Kalshi ticker (used for single bets that already know their
-    ticker — all the non-moneyline markets). Returns structured info like place_leg_detailed."""
+async def place_ticker_detailed(ticker: str, stake_dollars: float, side: str = "yes"):
+    """Buy `side` ('yes'|'no') on a specific Kalshi ticker (used for single bets / combo legs that
+    already know their exact ticker — all the non-moneyline markets, plus No-side picks like
+    'BTTS No'). Returns structured info like place_leg_detailed."""
+    side = (side or "yes").lower()
     try:
         async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "AlphaMarketsAI/1.0"}) as c:
-            _yb, yes_ask, _d = await orderbook_prices(c, ticker)
+            yes_bid, yes_ask, _d = await orderbook_prices(c, ticker)
     except Exception as exc:
         return {"ok": False, "info": f"book error: {exc}", "ticker": ticker}
-    if not yes_ask:
-        return {"ok": False, "info": "no live ask (illiquid)", "ticker": ticker}
-    ok, info = await place_order(ticker, "yes", stake_dollars)
-    return {"ok": ok, "info": info, "ticker": ticker,
-            "entry_price": round(yes_ask, 4), "count": int(stake_dollars / yes_ask)}
+    # Cost per contract: buying YES pays the yes-ask; buying NO pays (1 - yes-bid).
+    cost = yes_ask if side == "yes" else ((1 - yes_bid) if yes_bid is not None else None)
+    if not cost:
+        return {"ok": False, "info": "no live price (illiquid)", "ticker": ticker}
+    ok, info = await place_order(ticker, side, stake_dollars)
+    return {"ok": ok, "info": info, "ticker": ticker, "side": side,
+            "entry_price": round(cost, 4), "count": int(stake_dollars / cost)}
 
 
 async def close_ticker(ticker: str, stake_dollars: float):

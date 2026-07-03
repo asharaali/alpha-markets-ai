@@ -509,22 +509,22 @@ document.getElementById("lbAdd").addEventListener("click", () => {
 /* ---------- combo builder ---------- */
 function addLegFromBtn(b) {
   const d = b.dataset;
-  addComboLeg(d.label, parseFloat(d.prob), parseFloat(d.odds), d.home, d.away, d.market, d.sel, d.ticker || null);
+  addComboLeg(d.label, parseFloat(d.prob), parseFloat(d.odds), d.home, d.away, d.market, d.sel, d.ticker || null, d.side || "yes");
 }
-function addComboLeg(label, prob, odds, home, away, market, selection, ticker) {
+function addComboLeg(label, prob, odds, home, away, market, selection, ticker, side) {
   comboLegs.push({ label, model_prob: prob, market_odds_decimal: odds,
     home: home || null, away: away || null, market: market || null, selection: selection || null,
-    // Real Kalshi ticker (from the singles board) so the combo can actually be placed.
-    kalshi_ticker: ticker || null });
+    // Real Kalshi ticker + side (from the singles board) so the combo can actually be placed.
+    kalshi_ticker: ticker || null, side: side || "yes" });
   renderComboLegs();
   // jump to combo tab
   document.querySelector('.tab[data-tab="combo"]').click();
 }
-// Build a combo leg from a real-priced Kalshi single (tradeable odds + ticker).
+// Build a combo leg from a real-priced Kalshi single (tradeable odds + ticker + side).
 function addComboLegFromSingle(b) {
   const label = (b.selection || "").includes(" v ") ? b.selection : `${b.home} v ${b.away}: ${b.selection}`;
   const odds = b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99;
-  addComboLeg(label, b.fair_prob, odds, b.home, b.away, b.bet_type, b.selection, b.ticker);
+  addComboLeg(label, b.fair_prob, odds, b.home, b.away, b.bet_type, b.selection, b.ticker, b.side || "yes");
 }
 function renderComboLegs() {
   const wrap = document.getElementById("comboLegs");
@@ -696,19 +696,23 @@ function renderSingles() {
   if (!rows.length) { wrap.innerHTML = `<div class="empty">No markets match. Try the All filter or refresh.</div>`; return; }
   wrap.innerHTML = rows.slice(0, 80).map(singleCard).join("");
   rows.slice(0, 80).forEach((b) => {
-    const el = document.getElementById(`place-${b.ticker}`);
+    const uid = _rowId(b);
+    const el = document.getElementById(`place-${uid}`);
     if (el) el.onclick = () => placeSingle(b);
-    const rb = document.getElementById(`research-btn-${b.ticker}`);
+    const rb = document.getElementById(`research-btn-${uid}`);
     if (rb) rb.onclick = () => researchSingle(b);
-    const cb = document.getElementById(`combo-${b.ticker}`);
+    const cb = document.getElementById(`combo-${uid}`);
     if (cb) cb.onclick = () => addComboLegFromSingle(b);
   });
 }
 
 function _safeId(t) { return t.replace(/[^a-zA-Z0-9]/g, ""); }
+// Unique per row: a two-sided market (e.g. BTTS) shows Yes + No rows that share one ticker,
+// so element IDs must include the side or they'd collide and mis-wire the buttons.
+function _rowId(b) { return _safeId(`${b.ticker}-${b.side || "yes"}`); }
 
 async function researchSingle(b) {
-  const panel = document.getElementById(`research-${_safeId(b.ticker)}`);
+  const panel = document.getElementById(`research-${_rowId(b)}`);
   panel.style.display = "block";
   panel.innerHTML = `<div class="sub">🔎 Pulling recent news…</div>`;
   const player = b.bet_type === "Goalscorer" ? b.selection.replace(/\s+\d+\+.*/, "").trim() : "";
@@ -732,6 +736,7 @@ function confBadge(b) {
 function singleCard(b) {
   const bookTxt = b.book_prob != null ? `books ${(b.book_prob*100).toFixed(0)}%` : "no book line";
   const star = b.value_bet ? `<span class="star">★ VALUE</span>` : "";
+  const uid = _rowId(b);
   return `<div class="card ${b.value_bet ? "" : "dim"}">
     <div class="card-head">
       <div class="teams">${b.selection} ${star}</div>
@@ -746,12 +751,12 @@ function singleCard(b) {
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px">
         ${confBadge(b)}
         <div style="display:flex;gap:6px">
-          <button id="research-btn-${b.ticker}" class="btn" title="Recent news + injury check">🔎 Research</button>
-          <button id="combo-${b.ticker}" class="btn" title="Add to combo builder (real Kalshi odds)">＋ combo</button>
-          <button id="place-${b.ticker}" class="btn ${b.value_bet?'primary':''}">Place / paper</button>
+          <button id="research-btn-${uid}" class="btn" title="Recent news + injury check">🔎 Research</button>
+          <button id="combo-${uid}" class="btn" title="Add to combo builder (real Kalshi odds)">＋ combo</button>
+          <button id="place-${uid}" class="btn ${b.value_bet?'primary':''}">Place / paper</button>
         </div>
       </div>
-      <div id="research-${_safeId(b.ticker)}" class="research-panel" style="display:none;margin-top:8px;border-top:1px solid var(--line,#2a3550);padding-top:8px"></div>
+      <div id="research-${uid}" class="research-panel" style="display:none;margin-top:8px;border-top:1px solid var(--line,#2a3550);padding-top:8px"></div>
     </div></div>`;
 }
 
@@ -760,16 +765,16 @@ async function placeSingle(b) {
   if (amount <= 0) return alert("Enter an amount first.");
   const live = document.getElementById("singleLive").checked;
   if (live && !confirm(`Place ${b.selection} LIVE on Kalshi for $${amount} of REAL money?`)) return;
-  // A single bet is a 1-leg combo carrying its exact Kalshi ticker.
+  // A single bet is a 1-leg combo carrying its exact Kalshi ticker + side (yes/no).
   const combo = { legs: [{
     label: b.selection, model_prob: b.fair_prob,
     market_odds_decimal: b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99,
     home: b.home, away: b.away, market: b.bet_type, selection: b.selection,
-    kalshi_ticker: b.ticker,
+    kalshi_ticker: b.ticker, side: b.side || "yes",
   }], leg_count: 1, combined_model_prob: b.fair_prob, sport: SPORT,
     combined_odds_decimal: b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99,
     payout_multiple: b.kalshi_price_cents > 0 ? 100 / b.kalshi_price_cents : 99 };
-  const btn = document.getElementById(`place-${b.ticker}`);
+  const btn = document.getElementById(`place-${_rowId(b)}`);
   btn.disabled = true; btn.textContent = "Placing…";
   try {
     const r = await (await fetch(`${API}/api/combo/place`, {
@@ -985,8 +990,8 @@ document.querySelectorAll(".btn.ab").forEach((b) => {
     comboLegs = r.legs.map((l) => ({
       label: l.label, model_prob: l.model_prob, market_odds_decimal: l.market_odds_decimal,
       home: l.home, away: l.away, market: l.market, selection: l.selection,
-      // keep the Kalshi ticker so an auto-built combo stays placeable across every market
-      kalshi_ticker: l.kalshi_ticker || null,
+      // keep the Kalshi ticker + side so an auto-built combo stays placeable across every market
+      kalshi_ticker: l.kalshi_ticker || null, side: l.side || "yes",
     }));
     renderComboLegs();
     document.getElementById("evalCombo").click();
