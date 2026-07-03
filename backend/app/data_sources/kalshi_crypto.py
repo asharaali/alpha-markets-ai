@@ -175,4 +175,22 @@ async def get_crypto_markets(coin_filter: Optional[str] = None) -> List[Dict]:
     out.sort(key=lambda b: (b["has_pick"], b["pick"].get("ev_per_dollar", 0.0)), reverse=True)
     _CACHE["data"] = out
     _CACHE["ts"] = now
+    # Snapshot any new actionable picks so the model keeps its own honest track record.
+    try:
+        from app import crypto_log
+        crypto_log.record_picks(out)
+    except Exception as exc:
+        print(f"[kalshi_crypto] pick logging failed: {exc}")
     return [b for b in out if not coin_filter or b["coin"].lower() == coin_filter.lower()]
+
+
+async def fetch_result(ticker: str) -> Optional[str]:
+    """The settled outcome of a market: 'yes', 'no', or None if not settled yet / unavailable."""
+    try:
+        async with httpx.AsyncClient(timeout=15, headers=_UA, follow_redirects=True) as c:
+            r = await c.get(f"{KALSHI_BASE}/markets/{ticker}")
+            res = ((r.json().get("market") or {}).get("result") or "").lower()
+            return res if res in ("yes", "no") else None
+    except Exception as exc:
+        print(f"[kalshi_crypto] result {ticker} failed: {exc}")
+        return None

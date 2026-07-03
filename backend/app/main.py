@@ -299,6 +299,16 @@ async def crypto(coin: Optional[str] = None):
             "coins": sorted(set(SERIES.values())), "markets": markets}
 
 
+@app.get("/api/crypto/record")
+async def crypto_record():
+    """The crypto model's self-scored track record: settles any closed picks against Kalshi's
+    real result, then reports hit rate, calibration (predicted vs actual) and Brier score."""
+    from app.data_sources.kalshi_crypto import fetch_result
+    from app import crypto_log
+    await crypto_log.settle_due(fetch_result)
+    return crypto_log.stats()
+
+
 @app.get("/api/research")
 async def research_bet(home: str, away: str, player: Optional[str] = None):
     """
@@ -744,6 +754,15 @@ async def _notify_loop():
         _loop_beat["ts"] = _t.time()
         _loop_beat["iterations"] += 1
         try:
+            # Keep the crypto model's track record current: snapshot fresh picks + grade any
+            # windows that have since closed (runs regardless of whether anyone's watching).
+            try:
+                from app.data_sources.kalshi_crypto import get_crypto_markets, fetch_result
+                from app import crypto_log
+                await get_crypto_markets()
+                await crypto_log.settle_due(fetch_result)
+            except Exception as exc:
+                print(f"[loop] crypto self-scoring failed: {exc}")
             # Fetch each sport's scores once, then check every user's bets against them.
             users_with_bets = [u for u in auth.all_usernames() if bet_log.pending_bets(u)]
             if users_with_bets:

@@ -793,14 +793,38 @@ document.getElementById("singleValueOnly").addEventListener("change", renderSing
 document.getElementById("singleRefresh").addEventListener("click", loadSingles);
 
 /* ---------- Crypto 15-min ---------- */
-let _cryptoData = [], _cryptoPoll = null, _cryptoTick = null;
+let _cryptoData = [], _cryptoPoll = null, _cryptoTick = null, _cryptoRecPoll = null;
 function startCrypto() {
-  loadCrypto();
-  clearInterval(_cryptoPoll); clearInterval(_cryptoTick);
-  _cryptoPoll = setInterval(loadCrypto, 10000);   // fresh spot + prices every 10s
-  _cryptoTick = setInterval(tickCrypto, 1000);    // live countdown between refreshes
+  loadCrypto(); loadCryptoRecord();
+  clearInterval(_cryptoPoll); clearInterval(_cryptoTick); clearInterval(_cryptoRecPoll);
+  _cryptoPoll = setInterval(loadCrypto, 10000);        // fresh spot + prices every 10s
+  _cryptoTick = setInterval(tickCrypto, 1000);         // live countdown between refreshes
+  _cryptoRecPoll = setInterval(loadCryptoRecord, 60000); // grade + refresh track record each min
 }
-function stopCrypto() { clearInterval(_cryptoPoll); clearInterval(_cryptoTick); _cryptoPoll = _cryptoTick = null; }
+function stopCrypto() {
+  clearInterval(_cryptoPoll); clearInterval(_cryptoTick); clearInterval(_cryptoRecPoll);
+  _cryptoPoll = _cryptoTick = _cryptoRecPoll = null;
+}
+async function loadCryptoRecord() {
+  const el = document.getElementById("cryptoRecord");
+  try {
+    const d = await (await fetch(`${API}/api/crypto/record`)).json();
+    if (!d.graded) {
+      el.innerHTML = `📊 <b>Model track record:</b> 0 graded · ${d.pending || 0} pending — check back once a few 15-min windows settle.`;
+      return;
+    }
+    const hr = (d.hit_rate * 100).toFixed(0), am = (d.avg_model_prob * 100).toFixed(0);
+    const gap = ((d.hit_rate - d.avg_model_prob) * 100).toFixed(0);
+    const calib = Math.abs(gap) <= 3 ? "well calibrated" : (gap < 0 ? `${Math.abs(gap)} pts OVER-confident` : `${gap} pts under-confident`);
+    const conf = ["high", "medium", "low"].map((c) => {
+      const b = d.by_confidence[c]; return b.n ? `${c} ${(b.hit_rate * 100).toFixed(0)}% (${b.n})` : null;
+    }).filter(Boolean).join(" · ");
+    const edgeColor = d.hit_rate > 0.5 ? "var(--green)" : "var(--red)";
+    el.innerHTML = `📊 <b style="color:${edgeColor}">${hr}% hit rate</b> (${d.wins}/${d.graded} settled) · `
+      + `predicted ${am}% → <b>${calib}</b> · Brier ${d.brier} <small>(0.25 = coin flip)</small>`
+      + `<br><small>by confidence: ${conf || "—"} · ${d.pending} pending${d.hit_rate <= 0.5 ? " · ⚠️ not beating a coin flip yet" : ""}</small>`;
+  } catch (e) { /* leave last render */ }
+}
 
 async function loadCrypto() {
   const wrap = document.getElementById("cryptoList");
