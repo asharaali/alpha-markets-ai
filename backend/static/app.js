@@ -985,6 +985,8 @@ document.querySelectorAll(".btn.ab").forEach((b) => {
     comboLegs = r.legs.map((l) => ({
       label: l.label, model_prob: l.model_prob, market_odds_decimal: l.market_odds_decimal,
       home: l.home, away: l.away, market: l.market, selection: l.selection,
+      // keep the Kalshi ticker so an auto-built combo stays placeable across every market
+      kalshi_ticker: l.kalshi_ticker || null,
     }));
     renderComboLegs();
     document.getElementById("evalCombo").click();

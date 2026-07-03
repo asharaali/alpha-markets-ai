@@ -145,23 +145,33 @@ def build_auto_parlay(legs_pool: List[Dict], style: str = "moderate safe", max_l
     # Rank by closeness to the tier target, scaled by how much we trust that market.
     cands.sort(key=lambda c: abs(c["model_prob"] - target) / _reliability(c["market"]))
 
-    def _fill(require_distinct_type: bool):
+    def _fill(distinct_type: bool, distinct_game: bool):
         used_games = {(l["home"], l["away"]) for l in picked}
         used_types = {l["market"] for l in picked}
+        # (game, market) already used: two legs of the SAME market in the SAME game are mutually
+        # exclusive or nested (win vs draw, 8+ vs 9+ corners, over vs under) — never stack those.
+        used_game_market = {(l["home"], l["away"], l["market"]) for l in picked}
         for c in cands:
             if len(picked) >= n:
                 break
-            if (c["home"], c["away"]) in used_games:
+            gm = (c["home"], c["away"], c["market"])
+            if gm in used_game_market:                           # blocks contradictory/nested same-game legs
                 continue
-            if require_distinct_type and c["market"] in used_types:
+            if distinct_game and (c["home"], c["away"]) in used_games:
+                continue
+            if distinct_type and c["market"] in used_types:
                 continue
             picked.append(c)
             used_games.add((c["home"], c["away"]))
             used_types.add(c["market"])
+            used_game_market.add(gm)
 
+    # Prefer independent legs (one game each, varied markets); only stack same-game legs as a last
+    # resort to reach the requested count on a thin slate — evaluate_combo haircuts the correlation.
     picked: List[Dict] = []
-    _fill(require_distinct_type=True)      # first pass: force market-type variety
-    _fill(require_distinct_type=False)     # top up if the slate is too small to stay varied
+    _fill(distinct_type=True, distinct_game=True)      # best: varied markets, one game each
+    _fill(distinct_type=False, distinct_game=True)     # then: one game each, any market
+    _fill(distinct_type=False, distinct_game=False)    # last: same-game legs to hit the leg count
 
     if not picked:
         return {"error": f"no live Kalshi legs found for '{style}' that day"}
@@ -436,9 +446,18 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Opt
     stage = _stage_for(sport)
     combo_factor = stage.get("combo_factor", 1.0) if stage else 1.0
 
+    # Same-game legs are NOT independent (e.g. "Over 2.5" + "BTTS Yes" tend to hit together), so
+    # multiplying their probabilities overstates a same-game parlay's real chance. Haircut the
+    # combined prob for each leg beyond the first in any one game — keeps same-game EV honest.
+    from collections import Counter
+    _game_counts = Counter((l.get("home"), l.get("away")) for l in legs)
+    _extra_same_game = sum(c - 1 for c in _game_counts.values() if c > 1)
+    SAME_GAME_CORR = 0.85
+    corr_factor = SAME_GAME_CORR ** _extra_same_game
+
     from app.bet_log import reality_factor
     rf = reality_factor(user) if user else None
-    adj_prob = combined_prob * combo_factor
+    adj_prob = combined_prob * combo_factor * corr_factor
     if rf:
         adj_prob *= rf
     adj_prob = min(max(adj_prob, 1e-6), 0.999)
@@ -452,6 +471,7 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Opt
         "reality_factor": rf,
         "stage": stage["stage"] if stage else None,
         "stage_combo_factor": combo_factor,
+        "same_game_corr_factor": round(corr_factor, 3),
         "combined_odds_decimal": round(combined_odds, 2),
         "combined_odds_american": P.decimal_to_american(combined_odds),
         "payout_multiple": round(combined_odds, 2),
@@ -464,6 +484,10 @@ def evaluate_combo(legs: List[Dict], bankroll: Optional[float] = None, user: Opt
             "Combos are almost always -EV unless each leg is independently +value."
             + (f" Knockout-stage shrink applied ({stage['stage']}, factor {combo_factor})."
                if stage and combo_factor < 1.0 else "")
+            + (f" {_extra_same_game} same-game leg(s) detected — correlation haircut applied "
+               f"(factor {round(corr_factor, 3)}); same-game legs move together, so the true "
+               "combined odds are worse than independent math implies."
+               if _extra_same_game else "")
             + (f" Estimate shrunk by your logged results (reality factor {rf})." if rf else "")
         ),
     }
