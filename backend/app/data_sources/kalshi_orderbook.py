@@ -8,6 +8,7 @@ live Kalshi price (pricing, the weather tab, live order placement) goes through 
 "null price" bug can't come back.
 """
 from __future__ import annotations
+import asyncio
 from typing import List, Optional, Tuple
 
 import httpx
@@ -39,9 +40,17 @@ def prices_from_fp(fp: dict, min_depth: float = MIN_DEPTH):
 
 
 async def orderbook_prices(client: httpx.AsyncClient, ticker: str, min_depth: float = MIN_DEPTH):
-    """Depth-aware best YES bid/ask/depth for one market via the orderbook endpoint."""
-    try:
-        ob = (await client.get(f"{KALSHI_BASE}/markets/{ticker}/orderbook")).json()
-    except Exception:
-        return None, None, 0.0
-    return prices_from_fp(ob.get("orderbook_fp") or {}, min_depth)
+    """Depth-aware best YES bid/ask/depth for one market via the orderbook endpoint.
+    Retries on 429 — Kalshi rate-limits bursts, and silently treating a 429 as 'no price'
+    made whole boards read as untradeable."""
+    for attempt in range(4):
+        try:
+            r = await client.get(f"{KALSHI_BASE}/markets/{ticker}/orderbook")
+            if r.status_code == 429:
+                await asyncio.sleep(0.6 * (attempt + 1))
+                continue
+            ob = r.json()
+        except Exception:
+            return None, None, 0.0
+        return prices_from_fp(ob.get("orderbook_fp") or {}, min_depth)
+    return None, None, 0.0

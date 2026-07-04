@@ -78,7 +78,9 @@ def _evaluate_side(name: str, role: str, model_prob: float,
 
 
 def _evaluate_event(event: Dict, prices: Dict[str, float]) -> Optional[Dict]:
-    title = event.get("title", "")
+    # Kalshi titles now carry a market suffix ("A vs B: Regulation Time Moneyline") — strip it,
+    # or the away team never parses and every game reads as untradeable.
+    title = event.get("title", "").split(":", 1)[0]
     if " vs " not in title:
         return None
     home, away = [_canon(t) for t in title.split(" vs ", 1)]
@@ -86,7 +88,8 @@ def _evaluate_event(event: Dict, prices: Dict[str, float]) -> Optional[Dict]:
 
     sides, priced = {}, {}
     for m in markets:
-        sub = (m.get("yes_sub_title") or "").strip()
+        # Subtitles also grew a prefix ("Reg Time: Argentina") — keep only the pick itself.
+        sub = (m.get("yes_sub_title") or "").split(":", 1)[-1].strip()
         pr = _price(m, prices)
         if sub.lower() in ("tie", "draw"):
             key = "tie"
@@ -139,14 +142,21 @@ async def get_kalshi_wc_games() -> List[Dict]:
         print(f"[kalshi] fetch failed: {exc}")
         return _CACHE["data"] or []  # type: ignore[return-value]
 
-    # Real prices live in the orderbook endpoint — fetch them for every market in parallel,
+    # Real prices live in the orderbook endpoint — fetch them for every market, THROTTLED
+    # (an unbounded burst trips Kalshi's rate limit and the whole board reads untradeable),
     # then build a ticker -> mid-price map. (markets-list bid/ask is always null.)
     tickers = [m.get("ticker") for e in events for m in e.get("markets", []) if m.get("ticker")]
     prices: Dict[str, float] = {}
     try:
+        sem = asyncio.Semaphore(8)
+
+        async def _book(client, t):
+            async with sem:
+                return t, await orderbook_prices(client, t)
+
         async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "AlphaMarketsAI/1.0"}) as client:
-            books = await asyncio.gather(*[orderbook_prices(client, t) for t in tickers])
-        for t, (yes_bid, yes_ask, _depth) in zip(tickers, books):
+            books = await asyncio.gather(*[_book(client, t) for t in tickers])
+        for t, (yes_bid, yes_ask, _depth) in books:
             if yes_bid is not None and yes_ask is not None:
                 prices[t] = (yes_bid + yes_ask) / 2.0
     except Exception as exc:
