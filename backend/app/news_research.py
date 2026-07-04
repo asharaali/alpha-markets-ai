@@ -23,11 +23,15 @@ _FEED = "https://news.google.com/rss/search"
 _CACHE: Dict[str, tuple] = {}     # query -> (ts, parsed items)
 _TTL = 1800                       # 30 min — headlines don't change minute to minute
 
-# Words that signal a bet-moving availability story.
+# Words that signal a bet-moving availability story. Deliberately specific: bare "knock"
+# ("knock out Croatia"), bare "return" ("return to the Azteca") and bare "fitness" flagged
+# half the slate as injury news, which watered the signal down to noise.
 _RISK_RE = re.compile(
-    r"\b(injur\w*|doubt\w*|ruled out|out for|sidelin\w*|suspend\w*|ban(?:ned)?|"
-    r"hamstring|knock|strain\w*|fitness|withdraw\w*|miss(?:es|ed)? (?:the|out)|"
-    r"left out|not? in the squad|return\w*|fit again|back in train\w*)\b", re.I)
+    r"\b(injur\w*|doubt\w*|ruled out|out for|sidelin\w*|suspend\w*|banned|"
+    r"hamstring|strain\w*|fitness (?:test|doubt|concern|race)|withdraw\w*|"
+    r"miss(?:es|ed)? (?:the (?:match|game|clash)|out)|to miss\b|left out|not in the squad|"
+    r"knocks?\b(?!\s*out)|fit again|back in train\w*|"
+    r"return\w* (?:from|to) (?:injury|training|the squad|full fitness))\b", re.I)
 
 
 async def _fetch(query: str) -> List[Dict]:
@@ -99,3 +103,24 @@ async def research(home: str, away: str, player: Optional[str] = None,
         "headlines": deduped[:limit + (limit if player else 0)],
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+async def games_risk(games) -> Dict:
+    """Injury/availability risk per matchup, FOR THE PARLAY ENGINE (this is where the news
+    actually changes the numbers, not just the display). Reuses the same 30-min cached Google
+    News fetches as /api/research, so a parlay click costs at most one feed hit per new game.
+    Only headlines from the last 48h count — week-old 'doubt' stories are usually resolved.
+    Returns {(home, away): {"alerts": [headline, ...]}} for flagged games only."""
+    import asyncio
+    games = list(games)
+    results = await asyncio.gather(*[research(h, a, limit=3) for h, a in games],
+                                   return_exceptions=True)
+    out: Dict = {}
+    for (h, a), r in zip(games, results):
+        if isinstance(r, BaseException):
+            print(f"[news_research] risk check {h} v {a} failed: {r}")
+            continue
+        alerts = [i["title"] for i in (r.get("injury_alerts") or []) if i.get("age_hours", 999) <= 48]
+        if alerts:
+            out[(h, a)] = {"alerts": alerts}
+    return out

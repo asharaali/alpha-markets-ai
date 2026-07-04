@@ -54,10 +54,13 @@ def _legs_from_singles(singles: List[Dict], games: Optional[List[Dict]] = None) 
         sel = b.get("selection", "")
         # fair_prob = model blended toward the sharp book price; the honest per-leg prob.
         prob = b.get("fair_prob", b.get("model_prob"))
-        # Extra discipline where no book confirms the price: keep only part of the model's edge.
+        # Extra discipline where no book confirms the price: keep only part of the model's edge,
+        # scaled by how much we trust that market type. Corners/correct-score are the crudest
+        # sub-models (rate-based, no tactics/lineups), so their unconfirmed "edges" get shrunk
+        # hardest — a big model-vs-Kalshi gap there is model blindness, not value.
         if (b.get("confidence") or "").startswith("model") and odds and prob is not None:
             implied = 1.0 / odds
-            prob = implied + (prob - implied) * MODEL_ONLY_TRUST
+            prob = implied + (prob - implied) * MODEL_ONLY_TRUST * _reliability(market)
         out.append({
             "home": b.get("home"), "away": b.get("away"),
             "market": market, "mtype": market,
@@ -83,6 +86,50 @@ def _legs_from_singles(singles: List[Dict], games: Optional[List[Dict]] = None) 
 def _is_model_only(leg: Dict) -> bool:
     """No sportsbook cross-checks this market — the model is flying blind vs the Kalshi price."""
     return (leg.get("confidence") or "").startswith("model")
+
+
+def _low_reliability(leg: Dict) -> bool:
+    """Crude-model markets (corners, correct score, goalscorer): the auto-builders never stack
+    more than one of these per combo — two crude reads multiplied is compounding blindness."""
+    return _reliability(leg.get("market")) < 0.70
+
+
+def apply_news_risk(legs_pool: List[Dict], risk_map: Dict) -> None:
+    """Fold live injury/availability news (Google News, via app.news_research) into the leg pool.
+    The model knows nothing about lineups, so a flagged matchup means its inputs may be stale and
+    the live market is more likely to be right: shrink the leg's prob further toward the traded
+    price, kill the value flag if that erases the edge, and carry the headlines on the leg so any
+    combo it lands in can show WHY it was downgraded. Mutates the legs in place."""
+    NEWS_TRUST = 0.6   # keep 60% of the remaining model-vs-market gap on news-flagged games
+    for leg in legs_pool:
+        r = risk_map.get((leg.get("home"), leg.get("away")))
+        if not r or not r.get("alerts"):
+            continue
+        odds = leg.get("market_odds_decimal")
+        if odds and leg.get("model_prob") is not None:
+            implied = 1.0 / odds
+            leg["model_prob"] = implied + (leg["model_prob"] - implied) * NEWS_TRUST
+            leg["edge"] = leg["model_prob"] - implied
+            leg["ev"] = leg["model_prob"] * odds - 1.0
+            leg["value_bet"] = bool(leg.get("value_bet")) and leg["edge"] >= MIN_EDGE and leg["ev"] > 0
+        leg["news_alert"] = True
+        leg["news_headlines"] = r["alerts"][:2]
+
+
+def _news_note(legs: List[Dict]) -> str:
+    """One honest sentence listing the flagged games in a built combo (with a headline each)."""
+    seen, parts = set(), []
+    for l in legs:
+        g = (l.get("home"), l.get("away"))
+        if not l.get("news_alert") or g in seen:
+            continue
+        seen.add(g)
+        head = (l.get("news_headlines") or [""])[0]
+        parts.append(f"{g[0]} v {g[1]} (\"{head}\")")
+    if not parts:
+        return ""
+    return (" ⚠️ Injury/availability news on " + "; ".join(parts)
+            + " — those legs were already shrunk toward the market; read the headlines before placing.")
 
 
 # 5 risk tiers -> (TARGET per-leg probability, number of legs).
@@ -144,14 +191,38 @@ def build_auto_parlay(legs_pool: List[Dict], style: str = "moderate safe", max_l
     # Drop degenerate near-locks (decimal odds < 1.13 ≈ >88% implied, e.g. "Over 0.5 goals"):
     # they pay almost nothing, add no real edge, and just make every parlay look the same.
     cands = [c for c in legs_pool
-             if c.get("market_odds_decimal") and c["market_odds_decimal"] >= 1.13]
+             if c.get("market_odds_decimal") and c["model_prob"] is not None
+             and c["market_odds_decimal"] >= 1.13]
     if not cands:
         return {"error": "no live Kalshi-priced legs for those games right now"}
 
-    # Rank by closeness to the tier target, scaled by how much we trust that market, then take a
-    # SHORTLIST of the best-fitting legs and shuffle it — so re-clicking a tier surfaces a fresh
-    # parlay drawn from the legs that fit that risk level, not the same three every single time.
-    cands.sort(key=lambda c: abs(c["model_prob"] - target) / _reliability(c["market"]))
+    # A tier is a PROMISE about per-leg risk, so only legs genuinely NEAR the target qualify.
+    # Without this hard band, a thin knockout board quietly fills a "safe" parlay with the
+    # closest thing it has — coin-flips — which is exactly how nonsense combos happen.
+    TIER_BAND = 0.10
+    in_band = [c for c in cands if abs(c["model_prob"] - target) <= TIER_BAND]
+    if len(in_band) < 2:
+        in_band = [c for c in cands if abs(c["model_prob"] - target) <= TIER_BAND + 0.05]
+    if len(in_band) < 2:
+        closest = min(cands, key=lambda c: abs(c["model_prob"] - target))
+        return {"error": (f"No legs near the '{style}' risk level on today's board "
+                          f"(target ~{round(target * 100)}% per leg; closest live leg is "
+                          f"{closest.get('label')} at {round(closest['model_prob'] * 100)}%). "
+                          f"An honest engine won't dress that up as '{style}' — pick another tier "
+                          f"or wait for the board to fill in.")}
+    # The safest tiers also step around games with fresh injury/availability news — a leg can't
+    # be "safe" while the starting XI is in doubt (unless avoiding them empties the pool).
+    if target >= 0.70:
+        clean = [c for c in in_band if not c.get("news_alert")]
+        if len(clean) >= 2:
+            in_band = clean
+    cands = in_band
+
+    # Rank by closeness to the tier target, scaled by how much we trust that market (better EV
+    # breaks ties), then take a SHORTLIST of the best-fitting legs and shuffle it — so re-clicking
+    # a tier surfaces a fresh parlay drawn from legs that fit that risk level, not the same three.
+    cands.sort(key=lambda c: (round(abs(c["model_prob"] - target) / _reliability(c["market"]), 2),
+                              -(c.get("ev") or 0)))
     cands = cands[: max(n * 4, 12)]
     random.shuffle(cands)
 
@@ -171,6 +242,9 @@ def build_auto_parlay(legs_pool: List[Dict], style: str = "moderate safe", max_l
                 continue
             if distinct_type and c["market"] in used_types:
                 continue
+            # At most ONE crude-model leg (corners/correct score) per auto combo.
+            if _low_reliability(c) and any(_low_reliability(l) for l in picked):
+                continue
             picked.append(c)
             used_games.add((c["home"], c["away"]))
             used_types.add(c["market"])
@@ -187,6 +261,11 @@ def build_auto_parlay(legs_pool: List[Dict], style: str = "moderate safe", max_l
         return {"error": f"no live Kalshi legs found for '{style}' that day"}
     res = evaluate_combo(picked, bankroll, sport=sport)
     res["style"] = style
+    if len(picked) < n:
+        res["note"] = (res.get("note", "")
+                       + f" Only {len(picked)} leg(s) on the live board honestly fit the "
+                         f"'{style}' tier — a shorter parlay beats a mislabeled one.")
+    res["note"] = res.get("note", "") + _news_note(picked)
     if stage:
         res["stage"] = stage["stage"]
         res["stage_label"] = stage["label"]
@@ -223,8 +302,11 @@ def build_optimal_parlay(legs_pool: List[Dict], max_legs: int = 3,
     MAX_MODEL_ONLY_LEGS = 2
 
     # Real +EV singles only. _legs_from_singles already dropped reference props + untraded legs.
+    # The too-good-to-be-true cap tightens with market crudeness: an unconfirmed corners "edge"
+    # gets far less benefit of the doubt than an unconfirmed moneyline one.
     value_legs = [l for l in legs_pool if l.get("value_bet") and l.get("market_odds_decimal")
-                  and not (_is_model_only(l) and (l.get("ev") or 0) > MODEL_ONLY_MAX_EV)]
+                  and not (_is_model_only(l)
+                           and (l.get("ev") or 0) > MODEL_ONLY_MAX_EV * _reliability(l.get("market")))]
     if not value_legs:
         return {"optimize": True, "error": "No +EV edge on this day's board — the honest move is no bet."}
 
@@ -237,8 +319,11 @@ def build_optimal_parlay(legs_pool: List[Dict], max_legs: int = 3,
             # One leg per game -> distinct matchups only (avoids stacking correlated same-game legs).
             if len({(l["home"], l["away"]) for l in combo}) != r:
                 continue
-            # Don't pile up unverifiable (model-only) legs into a longshot fantasy.
+            # Don't pile up unverifiable (model-only) legs into a longshot fantasy,
+            # and never stack two crude-model legs (corners/correct score) together.
             if sum(_is_model_only(l) for l in combo) > MAX_MODEL_ONLY_LEGS:
+                continue
+            if sum(_low_reliability(l) for l in combo) > 1:
                 continue
             res = evaluate_combo(list(combo), bankroll, sport=sport)
             if res["ev_per_dollar"] <= 0:
@@ -268,7 +353,8 @@ def build_optimal_parlay(legs_pool: List[Dict], max_legs: int = 3,
                    + " ⭐ Optimizer discipline: skips too-good-to-be-true model-only edges and caps"
                      " how many legs no sportsbook cross-checks."
                    + (" All legs here are book-corroborated." if n_model_only == 0 else
-                      f" {n_model_only} leg(s) are model-only (no book confirmation) — size accordingly."))
+                      f" {n_model_only} leg(s) are model-only (no book confirmation) — size accordingly.")
+                   + _news_note(res.get("legs", [])))
     return res
 
 

@@ -26,14 +26,18 @@ from app.weather_analysis import analyze_weather
 from app import weather_calibration
 from app.analysis import (analyze_match, evaluate_combo, cashout_decision,
                           monitor_live_bets, build_auto_parlay, build_optimal_parlay,
-                          next_best_tips, _legset, _legs_from_singles)
+                          next_best_tips, _legset, _legs_from_singles, apply_news_risk)
 from app.soccer_model import (match_probabilities, update_after_result, MODEL_INFO,
                               extended_markets, live_leg_probability)
 from app import bet_log
 from app import autobet
+from app import elo_sync
 from app.notifications import send_push
 
 app = FastAPI(title="Alpha Markets AI", version="0.1.0")
+
+# Restore any live Elo patches (real results applied since the last retrain) on boot.
+elo_sync.apply_persisted()
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
@@ -262,6 +266,7 @@ async def kalshi(sport: Optional[str] = None):
         board = await get_matches("mlb")
         bets = [b for b in await get_single_bets(board) if b["bet_type"] == "Moneyline"]
         return {"count": len(bets), "tradeable": len(bets), "sport": "mlb", "singles": bets}
+    await elo_sync.maybe_sync()   # TTL-gated: folds new final scores into the ratings
     games = await get_kalshi_wc_games()
     tradeable = sum(1 for g in games if g.get("tradeable"))
     return {"count": len(games), "tradeable": tradeable, "sport": "soccer", "games": games}
@@ -362,6 +367,18 @@ async def parlay_auto(req: AutoParlayRequest, request: Request):
     pool = _legs_from_singles(singles, req.games)
     if not pool:
         return {"error": "no live Kalshi-priced legs for those games right now — check back as books fill in"}
+
+    if sport == "soccer":
+        # Keep Elo current with real finals, and fold fresh injury/availability news (Google
+        # News) into the leg probabilities BEFORE any combo is built. Best-effort: a dead news
+        # feed must never block building a parlay.
+        await elo_sync.maybe_sync()
+        try:
+            from app.news_research import games_risk
+            risk = await games_risk({(l["home"], l["away"]) for l in pool})
+            apply_news_risk(pool, risk)
+        except Exception as exc:
+            print(f"[parlay] news risk check failed: {exc}")
 
     if req.style.lower().strip() in ("optimize", "best"):
         # Skip parlays already on your slip so each request surfaces a fresh one.
