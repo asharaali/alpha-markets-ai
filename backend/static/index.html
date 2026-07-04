@@ -6,7 +6,7 @@
   <title>Alpha Markets AI</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=15" />
+  <link rel="stylesheet" href="/static/styles.css?v=16" />
 </head>
 <body>
   <div id="loginGate" class="login-gate">
@@ -49,6 +49,7 @@
     <button class="tab" data-tab="kalshi">Kalshi</button>
     <button class="tab" data-tab="singles">🎯 Single Bets</button>
     <button class="tab" data-tab="crypto">🪙 Crypto 15m</button>
+    <button class="tab" data-tab="perps">📈 Perps</button>
     <button class="tab" data-tab="combo">Combo Builder</button>
     <button class="tab" data-tab="cashout">Cash-Out Checker</button>
     <button class="tab" data-tab="record">My Record</button>
@@ -115,6 +116,22 @@
       </div>
       <div id="cryptoRecord" class="marketline" style="margin-bottom:10px">📊 Model track record loading…</div>
       <div id="cryptoList" class="matches"></div>
+    </section>
+
+    <!-- PERPS FUNDING CARRY -->
+    <section id="perps" class="panel">
+      <h2>📈 Perps — funding-rate carry <span class="muted" style="font-size:13px">— Kalshi perpetual futures vs the global market</span></h2>
+      <div class="ab-warn">
+        <b>How this edge works:</b> every 8 hours the crowded side of a perp pays the other side (the funding rate).
+        When Kalshi's retail-heavy book leans long harder than veteran venues (Hyperliquid, Deribit), shorting the
+        Kalshi perp while hedged long elsewhere <b>collects that spread with no price exposure</b>.
+        This model <b>never recommends naked leveraged direction</b> — at 6x, a ~17% move liquidates you, and BTC does
+        that in a bad week. <b>COLLECT</b> = spread is rich and persistent · <b>WATCH</b> = interesting, not proven ·
+        <b>PASS/CHEAP</b> = no carry worth the legs. The carry needs BOTH legs (Kalshi + hedge) — this is a research
+        monitor, not a one-click bet.
+      </div>
+      <div id="perpsStatus" class="sub" style="margin:10px 0">Loading Kalshi perps + global funding…</div>
+      <div id="perpsList" class="bet-list"></div>
     </section>
 
     <!-- COMBO BUILDER -->
@@ -286,6 +303,6 @@
     Alpha Markets AI surfaces mathematical edge (vig-removal, expected value, Kelly sizing). It does not predict the future and cannot guarantee outcomes. Bet only what you can afford to lose. For 18+/21+ where legal.
   </footer>
 
-  <script src="/static/app.js?v=15"></script>
+  <script src="/static/app.js?v=16"></script>
 </body>
 </html>

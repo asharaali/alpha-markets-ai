@@ -57,6 +57,7 @@ document.querySelectorAll(".tab").forEach((t) => {
     if (t.dataset.tab === "autobet") loadAutobet();
     if (t.dataset.tab === "combo") loadComboGames();
     if (t.dataset.tab === "weather") loadWeather();
+    if (t.dataset.tab === "perps") loadPerps();
     if (t.dataset.tab === "cashout") loadCashoutGames();
   });
 });
@@ -148,6 +149,39 @@ function weatherMarketRow(m) {
     <div class="bet-info"><b>${m.city} ${m.label}</b>
       <div class="meta">${m.date} · ${m.lead_days}d · NWS ${m.forecast_high_f}°F</div></div>
     <div class="sub" style="text-align:right">model <b>${pct(m.model_prob)}</b><br>mkt ${bid}/${ask}</div></div>`;
+}
+
+/* ---------- perps funding carry ---------- */
+const aprPct = (v) => (v == null ? "—" : `${v > 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
+async function loadPerps() {
+  const status = document.getElementById("perpsStatus");
+  status.textContent = "Loading Kalshi perps + global funding…";
+  let d;
+  try {
+    d = await (await fetch(`${API}/api/perps`)).json();
+  } catch (e) { status.textContent = "Couldn't load perps markets."; return; }
+  status.innerHTML = `<b>${d.count}</b> live Kalshi perps · <b>${d.pick_count}</b> COLLECT signal${d.pick_count === 1 ? "" : "s"}`
+    + ` · benchmark = Hyperliquid + Deribit funding (all rates annualized)`;
+  document.getElementById("perpsList").innerHTML = d.markets.map(perpRow).join("")
+    || `<div class="empty">No active perp markets returned.</div>`;
+}
+function perpRow(m) {
+  const v = m.verdict;
+  const style = { COLLECT: ["var(--green)", "💰"], WATCH: ["#d8a657", "👀"],
+                  CHEAP: ["var(--muted)", "🧊"], PASS: ["var(--muted)", "—"] }[v.action] || ["var(--muted)", ""];
+  const f = m.funding, h = m.history_7d, c = m.carry;
+  const hist = h.n ? `longs paid ${Math.round((h.pos_share || 0) * 100)}% of last ${h.n} periods (avg ${aprPct(h.avg_apr)})` : "no funding history yet";
+  const carry = f.spread_apr != null
+    ? `carry vs hedged perp <b>${aprPct(c.vs_perp_apr)}</b> (${c.vs_perp_usd_per_1k_day > 0 ? "+" : ""}$${c.vs_perp_usd_per_1k_day}/day per $1k) · vs spot ${aprPct(c.vs_spot_apr)}`
+    : "no external benchmark for this coin";
+  return `<div class="bet">
+    <div class="bet-info"><b>${m.coin}</b> <span class="muted">$${(m.implied_spot ?? 0).toLocaleString()}</span>
+      <div class="meta">Kalshi funding <b>${aprPct(f.kalshi_apr)}</b> APR vs world ${aprPct(f.benchmark_apr)} → spread <b style="color:${(f.spread_apr || 0) >= 0.05 ? "var(--green)" : "var(--text)"}">${aprPct(f.spread_apr)}</b> · basis ${m.basis_bps == null ? "—" : m.basis_bps + "bps"}</div>
+      <div class="meta">${hist}</div>
+      <div class="sub">${carry}</div>
+      <div class="sub">~${m.leverage_estimate ? m.leverage_estimate.toFixed(1) : "—"}x max · liquidation ≈ ${m.liquidation_move ? Math.round(m.liquidation_move * 100) + "% adverse move" : "—"} · OI $${Math.round((m.open_interest_usd || 0) / 1000).toLocaleString()}k · 24h vol $${Math.round((m.volume_24h_usd || 0) / 1e6).toLocaleString()}M</div>
+      <div class="sub" style="opacity:.85">${style[1]} ${v.reason}</div></div>
+    <span class="result-badge won" style="background:${style[0]}22;color:${style[0]}">${v.action}</span></div>`;
 }
 
 /* ---------- auto-bet ---------- */

@@ -304,6 +304,18 @@ async def crypto(coin: Optional[str] = None):
             "coins": sorted(set(SERIES.values())), "markets": markets}
 
 
+@app.get("/api/perps")
+async def perps(coin: Optional[str] = None):
+    """Live Kalshi perpetual futures priced by the funding-carry model: Kalshi's funding rate
+    vs the global benchmark (Hyperliquid + Deribit), basis, trailing persistence, and the
+    delta-neutral carry each spread pays. Verdicts are COLLECT/WATCH/CHEAP/PASS — this model
+    hunts funding income, it never recommends naked leveraged direction."""
+    from app.data_sources.kalshi_perps import get_perp_markets
+    markets = await get_perp_markets(coin)
+    return {"count": len(markets), "pick_count": sum(m["has_pick"] for m in markets),
+            "coins": sorted({m["coin"] for m in markets}), "markets": markets}
+
+
 @app.get("/api/crypto/record")
 async def crypto_record():
     """The crypto model's self-scored track record: settles any closed picks against Kalshi's
