@@ -216,23 +216,23 @@ def build_auto_parlay(legs_pool: List[Dict], style: str = "moderate safe", max_l
         clean = [c for c in in_band if not c.get("news_alert")]
         if len(clean) >= 2:
             in_band = clean
-    cands = in_band
 
     # Rank by closeness to the tier target, scaled by how much we trust that market (better EV
     # breaks ties), then take a SHORTLIST of the best-fitting legs and shuffle it — so re-clicking
     # a tier surfaces a fresh parlay drawn from legs that fit that risk level, not the same three.
-    cands.sort(key=lambda c: (round(abs(c["model_prob"] - target) / _reliability(c["market"]), 2),
-                              -(c.get("ev") or 0)))
-    cands = cands[: max(n * 4, 12)]
-    random.shuffle(cands)
+    def _fit(c):
+        return abs(c["model_prob"] - target) / _reliability(c["market"])
+    in_band.sort(key=lambda c: (round(_fit(c), 2), -(c.get("ev") or 0)))
+    shortlist = in_band[: max(n * 4, 12)]
+    random.shuffle(shortlist)
 
-    def _fill(distinct_type: bool, distinct_game: bool):
+    def _fill(pool: List[Dict], distinct_type: bool, distinct_game: bool):
         used_games = {(l["home"], l["away"]) for l in picked}
         used_types = {l["market"] for l in picked}
         # (game, market) already used: two legs of the SAME market in the SAME game are mutually
         # exclusive or nested (win vs draw, 8+ vs 9+ corners, over vs under) — never stack those.
         used_game_market = {(l["home"], l["away"], l["market"]) for l in picked}
-        for c in cands:
+        for c in pool:
             if len(picked) >= n:
                 break
             gm = (c["home"], c["away"], c["market"])
@@ -253,18 +253,38 @@ def build_auto_parlay(legs_pool: List[Dict], style: str = "moderate safe", max_l
     # Prefer independent legs (one game each, varied markets); only stack same-game legs as a last
     # resort to reach the requested count on a thin slate — evaluate_combo haircuts the correlation.
     picked: List[Dict] = []
-    _fill(distinct_type=True, distinct_game=True)      # best: varied markets, one game each
-    _fill(distinct_type=False, distinct_game=True)     # then: one game each, any market
-    _fill(distinct_type=False, distinct_game=False)    # last: same-game legs to hit the leg count
+    _fill(shortlist, distinct_type=True, distinct_game=True)   # best: varied markets, one game each
+    _fill(shortlist, distinct_type=False, distinct_game=True)  # then: one game each, any market
+    _fill(shortlist, distinct_type=False, distinct_game=False) # last: same-game legs to hit the count
+    n_tier_legs = len(picked)
+
+    # The user asked for n legs. If the tier band can't supply them all, DELIVER the count anyway
+    # by topping up with the nearest-to-target legs outside the band (news-clean ones first) and
+    # disclose the drift — silently returning fewer legs than asked reads as broken.
+    if len(picked) < n:
+        in_ids = {id(c) for c in in_band}
+        extras = sorted((c for c in cands if id(c) not in in_ids),
+                        key=lambda c: (bool(c.get("news_alert")), round(_fit(c), 2),
+                                       -(c.get("ev") or 0)))
+        _fill(extras, distinct_type=False, distinct_game=True)
+        _fill(extras, distinct_type=False, distinct_game=False)
 
     if not picked:
         return {"error": f"no live Kalshi legs found for '{style}' that day"}
     res = evaluate_combo(picked, bankroll, sport=sport)
     res["style"] = style
+    if n_tier_legs < len(picked):
+        off = len(picked) - n_tier_legs
+        res["note"] = (res.get("note", "")
+                       + f" ⚠️ Only {n_tier_legs} live leg(s) genuinely sit at the '{style}' risk "
+                         f"level — the other {off} are the closest available, so treat this parlay "
+                         f"as running away from its label (per-leg probabilities above are the "
+                         f"honest read).")
     if len(picked) < n:
         res["note"] = (res.get("note", "")
-                       + f" Only {len(picked)} leg(s) on the live board honestly fit the "
-                         f"'{style}' tier — a shorter parlay beats a mislabeled one.")
+                       + f" The live board can only support {len(picked)} of the {n} legs you asked "
+                         f"for without stacking contradictory or duplicate-crude-model legs — a "
+                         f"shorter parlay beats a padded one.")
     res["note"] = res.get("note", "") + _news_note(picked)
     if stage:
         res["stage"] = stage["stage"]
@@ -342,16 +362,24 @@ def build_optimal_parlay(legs_pool: List[Dict], max_legs: int = 3,
         res["note"] = "You've already got every +EV parlay on this board. This is the strongest one again."
         return res
 
-    res = dict(fresh[0][2])
+    # Honor the requested size when a +EV combo of that size exists; otherwise fall back to the
+    # best smaller one and say so — never pad a parlay with -EV legs just to hit a leg count.
+    full_size = [r for r in fresh if r[2]["leg_count"] == max_legs]
+    pick_from = full_size or fresh
+    res = dict(pick_from[0][2])
     res["optimize"] = True
     stage = _stage_for(sport)
     if stage:
         res["stage_label"] = stage["label"]
-    res["alternatives"] = [r[2] for r in fresh[1:4]]
+    res["alternatives"] = [r[2] for r in pick_from[1:4]]
     n_model_only = sum(_is_model_only(l) for l in res.get("legs", []))
     res["note"] = (res.get("note", "")
                    + " ⭐ Optimizer discipline: skips too-good-to-be-true model-only edges and caps"
                      " how many legs no sportsbook cross-checks."
+                   + ("" if full_size or max_legs <= 1 else
+                      f" No +EV {max_legs}-leg combo exists on this board — padding to {max_legs} "
+                      f"would mean adding losing legs, so this is the strongest "
+                      f"{res['leg_count']}-leg play instead.")
                    + (" All legs here are book-corroborated." if n_model_only == 0 else
                       f" {n_model_only} leg(s) are model-only (no book confirmation) — size accordingly.")
                    + _news_note(res.get("legs", [])))
