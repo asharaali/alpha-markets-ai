@@ -50,6 +50,9 @@ _PROP_SERIES = set(_BATTER_PROPS) | {"KXMLBKS", "KXMLBRFI"}
 
 _CACHE: Dict[str, object] = {"data": None, "ts": 0.0}
 _CACHE_TTL = 90
+_LAST_GOOD: Dict[str, object] = {"data": None, "ts": 0.0}
+_STALE_OK = 15 * 60
+_EMPTY_RETRY = 10
 
 
 def _canon(name: str) -> str:
@@ -287,6 +290,16 @@ async def get_single_bets(board: Optional[List[Dict]] = None) -> List[Dict]:
             })
 
     out.sort(key=lambda b: (b["value_bet"], b["ev_per_dollar"]), reverse=True)
+    # Stale-if-error, same as kalshi_single: never let a transient empty (429/blip) board
+    # replace a recent good one, and let empty results expire fast so retries retry.
+    if not out and _LAST_GOOD["data"]:
+        if time.time() - float(_LAST_GOOD["ts"]) < _STALE_OK:
+            _CACHE["data"] = _LAST_GOOD["data"]
+            _CACHE["ts"] = time.time() - (_CACHE_TTL - _EMPTY_RETRY)
+            return _LAST_GOOD["data"]  # type: ignore[return-value]
+    if out:
+        _LAST_GOOD["data"] = out
+        _LAST_GOOD["ts"] = time.time()
     _CACHE["data"] = out
-    _CACHE["ts"] = time.time()
+    _CACHE["ts"] = time.time() if out else time.time() - (_CACHE_TTL - _EMPTY_RETRY)
     return out

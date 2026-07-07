@@ -49,6 +49,11 @@ SERIES = {
 
 _CACHE: Dict[str, object] = {"data": None, "ts": 0.0}
 _CACHE_TTL = 90
+# Stale-if-error: the last non-empty board, served when a refresh comes back empty (Kalshi
+# 429s/blips). Better a few-minutes-old real board than "no markets" on a live board.
+_LAST_GOOD: Dict[str, object] = {"data": None, "ts": 0.0}
+_STALE_OK = 15 * 60          # how old a last-good board may be and still stand in
+_EMPTY_RETRY = 10            # an empty (failed) refresh only sticks this long
 
 # Player props are priced for REFERENCE only, never flagged as value: the goalscorer model
 # is rate-based and blind to what the prop market actually prices — the starting XI, who's
@@ -372,6 +377,18 @@ async def get_single_bets(board: Optional[List[Dict]] = None) -> List[Dict]:
 
     # Best value first, but keep everything browsable.
     out.sort(key=lambda b: (b["value_bet"], b["ev_per_dollar"]), reverse=True)
+    # A transient Kalshi failure (429 storm / feed blip) yields an EMPTY board. Never cache
+    # that over a recent good one — serve the last good board (stale beats broken), and only
+    # let the empty result stick briefly so retries actually retry.
+    if not out and _LAST_GOOD["data"]:
+        if time.time() - float(_LAST_GOOD["ts"]) < _STALE_OK:
+            _CACHE["data"] = _LAST_GOOD["data"]
+            _CACHE["ts"] = time.time() - (_CACHE_TTL - _EMPTY_RETRY)
+            return _LAST_GOOD["data"]  # type: ignore[return-value]
+    if out:
+        _LAST_GOOD["data"] = out
+        _LAST_GOOD["ts"] = time.time()
     _CACHE["data"] = out
-    _CACHE["ts"] = time.time()
+    # Empty boards expire fast so the next click re-hits Kalshi instead of re-serving failure.
+    _CACHE["ts"] = time.time() if out else time.time() - (_CACHE_TTL - _EMPTY_RETRY)
     return out

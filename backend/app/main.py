@@ -378,6 +378,10 @@ async def parlay_auto(req: AutoParlayRequest, request: Request):
     singles = await get_single_bets(board)
     pool = _legs_from_singles(singles, req.games)
     if not pool:
+        # Distinguish a dead FEED (whole board empty -> Kalshi 429/blip, retry helps) from a
+        # thin BOOK (other games are priced, just not the requested ones).
+        if not singles:
+            return {"error": "Kalshi's data feed hiccuped (likely rate-limited) — hit the button again in ~30 seconds"}
         return {"error": "no live Kalshi-priced legs for those games right now — check back as books fill in"}
 
     if sport == "soccer":
