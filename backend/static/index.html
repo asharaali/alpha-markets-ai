@@ -1,308 +1,53 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Alpha Markets AI</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=16" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Alpha Markets — NFL Research Terminal</title>
+  <meta name="description" content="Quantitative NFL market research: model probabilities, market prices, and the edge between them." />
+  <link rel="stylesheet" href="/static/css/terminal.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230a0c10'/><path d='M6 22l5-12 5 12M9 18h4M19 10v12M19 10h4a3 3 0 010 6h-4' stroke='%234d8dff' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>" />
 </head>
 <body>
-  <div id="loginGate" class="login-gate">
+  <div id="loginGate" class="login-gate" hidden>
     <div class="login-box">
-      <div class="login-logo">α</div>
-      <h1>Alpha Markets AI</h1>
-      <p class="login-sub">Log in, or create an account to get started</p>
-      <input id="liUser" placeholder="username" autocomplete="username" />
+      <h2>Alpha Markets</h2>
+      <p>NFL quantitative market research. Sign in to track a portfolio and size positions — research, projections and prices are readable without an account.</p>
+      <input id="liUser" placeholder="username" autocomplete="username" autocapitalize="off" />
       <input id="liPass" type="password" placeholder="password" autocomplete="current-password" />
-      <div id="liError" class="login-error"></div>
-      <button id="liLogin" class="btn primary">Log in</button>
-      <button id="liSignup" class="btn">Create account</button>
-      <p class="login-note">🔒 Your bets, record &amp; data are private to your account — nobody else can see them.</p>
+      <div id="liError" class="login-error" role="alert"></div>
+      <div class="login-actions">
+        <button id="liLogin" class="btn primary">Sign in</button>
+        <button id="liSignup" class="btn">Create account</button>
+      </div>
+      <div class="login-actions" style="margin-top:12px">
+        <button id="liSkip" class="btn sm" style="flex:none">Continue without an account</button>
+      </div>
     </div>
   </div>
 
-  <header class="topbar">
-    <div class="brand">
-      <div class="logo">α</div>
-      <div>
-        <h1>Alpha Markets AI</h1>
-        <p class="tagline" id="tagline">Edge detection &amp; risk-sized calls — World Cup beta</p>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">Alpha Markets</div>
+        <div class="brand-sub">NFL research terminal</div>
       </div>
-    </div>
-    <div class="sport-switch" id="sportSwitch">
-      <button class="sportbtn active" data-sport="soccer">⚽ World Cup</button>
-      <button class="sportbtn" data-sport="mlb">⚾ MLB</button>
-    </div>
-    <div class="status">
-      <span id="modelBadge" class="badge" title="Trained model accuracy">model: —</span>
-      <span id="liveDot" class="live-dot"></span>
-      <span id="liveLabel">connecting…</span>
-      <span id="modeBadge" class="badge">—</span>
-      <span id="userTag" class="user-tag"></span>
-    </div>
-  </header>
+      <nav class="nav" id="nav"></nav>
+      <div class="sidebar-foot">
+        <div id="footStatus"><span class="status-dot"></span>connecting…</div>
+        <div id="footUser" style="margin-top:6px"></div>
+      </div>
+    </aside>
 
-  <nav class="tabs">
-    <button class="tab active" data-tab="dashboard">Live Board</button>
-    <button class="tab" data-tab="kalshi">Kalshi</button>
-    <button class="tab" data-tab="singles">🎯 Single Bets</button>
-    <button class="tab" data-tab="crypto">🪙 Crypto 15m</button>
-    <button class="tab" data-tab="perps">📈 Perps</button>
-    <button class="tab" data-tab="combo">Combo Builder</button>
-    <button class="tab" data-tab="cashout">Cash-Out Checker</button>
-    <button class="tab" data-tab="record">My Record</button>
-    <button class="tab" data-tab="autobet">🤖 Auto-Bet</button>
-    <button class="tab" data-tab="weather">🌡️ Markets</button>
-  </nav>
+    <main class="main">
+      <header class="topbar">
+        <h1 id="pageTitle">Dashboard</h1>
+        <div class="topbar-meta" id="topMeta"></div>
+      </header>
+      <div class="content" id="view" role="main" aria-live="polite"></div>
+    </main>
+  </div>
 
-  <div id="dataBanner" class="data-banner"></div>
-
-  <main>
-    <!-- DASHBOARD -->
-    <section id="dashboard" class="panel active">
-      <div class="legend">
-        <span class="pill safe">SAFE — high hit rate</span>
-        <span class="pill mid">MID — balanced</span>
-        <span class="pill risky">RISKY — longshot value</span>
-        <span class="pill value">★ = model sees +EV value</span>
-      </div>
-      <div class="filterbar">
-        <button class="filt active" data-filt="today">Today</button>
-        <button class="filt" data-filt="upcoming">Next 7 days</button>
-        <button class="filt" data-filt="all">All</button>
-        <span class="filt-hint">Tap any pick's <b>＋ combo</b> to build a parlay →</span>
-      </div>
-      <div id="matches" class="matches"></div>
-    </section>
-
-    <!-- KALSHI -->
-    <section id="kalshi" class="panel">
-      <h2>Kalshi — World Cup markets</h2>
-      <p class="muted">Live Kalshi game markets with our trained model overlaid. Prices are in cents (55¢ = 55% implied). ★ = model sees value vs Kalshi's price. Untraded markets show no price until Kalshi gets liquidity.</p>
-      <div id="kalshiGames" class="matches"></div>
-    </section>
-
-    <!-- SINGLE BETS -->
-    <section id="singles" class="panel">
-      <h2>🎯 Single Bets — every Kalshi market</h2>
-      <p class="muted">Each individual Kalshi World Cup bet — moneyline, spread, totals, BTTS, corners, correct score, player goalscorer, to-advance — with the model's fair value <b>and a multi-bookmaker cross-check</b>. ✅ high = the books back the model. ⚠️ medium = books disagree (sit out). 🔵 model-only = Kalshi-exclusive market. Enter an amount, then place or paper-test it.</p>
-      <div class="singles-controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-        <select id="singleCat"><option value="">All categories</option></select>
-        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">value only
-          <input type="checkbox" id="singleValueOnly"></label>
-        <input id="singleAmount" type="number" placeholder="$ amount" value="10" style="width:90px">
-        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">
-          <input type="checkbox" id="singleLive"> LIVE (real money)</label>
-        <button id="singleRefresh" class="btn">↻ Refresh</button>
-      </div>
-      <div id="singlesList" class="matches"></div>
-    </section>
-
-    <!-- CRYPTO 15-MIN -->
-    <section id="crypto" class="panel">
-      <h2>🪙 Crypto — 15-minute markets</h2>
-      <p class="muted">Kalshi's 15-minute BTC &amp; ETH binaries. For each window I read the recent price action into an <b>UP / DOWN chart signal</b>, price the "will it close ≥ target?" binary (spot + live volatility + a capped momentum drift), compare to the real Kalshi price, and <b>tell you what to place — buy UP, buy DOWN, or PASS</b>. ⚠️ 15-min direction is mostly noise: treat picks as a lean, not a lock. Board refreshes every 10s.</p>
-      <div class="singles-controls" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-        <select id="cryptoCoin"><option value="">BTC + ETH</option><option value="BTC">BTC</option><option value="ETH">ETH</option></select>
-        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">picks only
-          <input type="checkbox" id="cryptoValueOnly"></label>
-        <input id="cryptoAmount" type="number" placeholder="$ amount" value="10" style="width:90px">
-        <label class="sub" style="display:flex;gap:6px;align-items:center;margin:0">
-          <input type="checkbox" id="cryptoLive"> LIVE (real money)</label>
-        <button id="cryptoRefresh" class="btn">↻ Refresh</button>
-        <span id="cryptoAuto" class="sub" style="opacity:.7"></span>
-      </div>
-      <div id="cryptoRecord" class="marketline" style="margin-bottom:10px">📊 Model track record loading…</div>
-      <div id="cryptoList" class="matches"></div>
-    </section>
-
-    <!-- PERPS FUNDING CARRY -->
-    <section id="perps" class="panel">
-      <h2>📈 Perps — funding-rate carry <span class="muted" style="font-size:13px">— Kalshi perpetual futures vs the global market</span></h2>
-      <div class="ab-warn">
-        <b>How this edge works:</b> every 8 hours the crowded side of a perp pays the other side (the funding rate).
-        When Kalshi's retail-heavy book leans long harder than veteran venues (Hyperliquid, Deribit), shorting the
-        Kalshi perp while hedged long elsewhere <b>collects that spread with no price exposure</b>.
-        This model <b>never recommends naked leveraged direction</b> — at 6x, a ~17% move liquidates you, and BTC does
-        that in a bad week. <b>COLLECT</b> = spread is rich and persistent · <b>WATCH</b> = interesting, not proven ·
-        <b>PASS/CHEAP</b> = no carry worth the legs. The carry needs BOTH legs (Kalshi + hedge) — this is a research
-        monitor, not a one-click bet.
-      </div>
-      <div id="perpsStatus" class="sub" style="margin:10px 0">Loading Kalshi perps + global funding…</div>
-      <div id="perpsList" class="bet-list"></div>
-    </section>
-
-    <!-- COMBO BUILDER -->
-    <section id="combo" class="panel">
-      <h2>Combo / Parlay Builder</h2>
-      <p class="muted">Add legs (auto-filled when you click "＋ combo" on a value bet, or enter manually). The model multiplies the true probabilities and the payout, then tells you if the combo is actually worth it.</p>
-      <p class="muted" style="font-size:12.5px">Every market the model prices is a legal leg — pick game → market → selection below. <b>⚽ Soccer:</b> moneyline, spread, total goals (Over/Under 0.5–5.5), BTTS, corners, correct score, goalscorer. <b>⚾ MLB:</b> moneyline, run line (−1.5/−2.5/−3.5), total runs (Over/Under 2.5–11.5), team totals, first-5-innings. <span style="color:var(--muted)">Kalshi allows 2+ legs, same-game or across games, from these market types.</span></p>
-      <div class="autobuild">
-        <span class="ab-label">🎲 Auto-build a parlay
-          <small>Pick a date, then a risk level. Mixes markets: who-wins · totals · margins · BTTS · player props.</small>
-        </span>
-        <div class="ab-row">
-          <input type="date" id="abDate" />
-          <label class="ab-legs-label">Legs
-            <select id="abLegs">
-              <option value="2">2</option>
-              <option value="3" selected>3</option>
-              <option value="4">4</option>
-              <option value="5">5</option>
-              <option value="6">6</option>
-              <option value="7">7</option>
-              <option value="8">8</option>
-            </select>
-          </label>
-          <div class="ab-tiers">
-            <button class="btn ab" data-style="safe">Safe</button>
-            <button class="btn ab" data-style="moderate safe">Mod. safe</button>
-            <button class="btn ab" data-style="slight risk">Slight risk</button>
-            <button class="btn ab" data-style="medium risk">Medium risk</button>
-            <button class="btn ab" data-style="risky">Risky</button>
-          </div>
-        </div>
-        <div class="ab-row" style="margin-top:12px">
-          <button class="btn ab" data-style="optimize">⭐ Best Parlay — max odds + money + safety the model can find</button>
-        </div>
-      </div>
-      <div class="leg-builder">
-        <span class="lb-label">➕ Build a leg — pick from the menu (auto-fills the odds):</span>
-        <div class="lb-row">
-          <select id="lbGame"><option value="">1. choose game…</option></select>
-          <select id="lbMarket"><option value="">2. market…</option></select>
-          <select id="lbSel"><option value="">3. pick…</option></select>
-          <button id="lbAdd" class="btn primary">＋ Add leg</button>
-        </div>
-      </div>
-      <div id="comboLegs" class="combo-legs"></div>
-      <details class="manual-leg">
-        <summary>or enter a leg manually</summary>
-        <div class="combo-add">
-          <input id="legLabel" placeholder="Leg label (e.g. Argentina to win)" />
-          <input id="legProb" type="number" step="0.01" min="0" max="1" placeholder="model prob (0-1)" />
-          <input id="legOdds" type="number" step="0.01" min="1" placeholder="decimal odds" />
-          <button id="addLeg" class="btn">Add leg</button>
-        </div>
-      </details>
-      <div class="combo-add">
-        <input id="comboStake" type="number" step="1" min="0" placeholder="stake $ (for logging)" value="20" />
-        <input id="comboBook" placeholder="book (Kalshi / Polymarket / …)" value="Kalshi" />
-      </div>
-      <button id="evalCombo" class="btn primary">Evaluate combo</button>
-      <div id="comboResult" class="result-card"></div>
-    </section>
-
-    <!-- CASH-OUT -->
-    <section id="cashout" class="panel">
-      <h2>Cash-Out Checker</h2>
-      <p class="muted">For a position you already hold (Kalshi / Polymarket / exchange). Prices are 0–1 (40¢ = 0.40). Tells you to hold, take profit, or bail if the tables have turned.</p>
-      <div class="ab-warn" style="margin-bottom:14px">
-        <b>🔄 Sync your real Kalshi price.</b> Pick your game + side and your entry price — it pulls the LIVE cash-out price straight from Kalshi's order book and runs the call on real money, not a guess. (Sportsbook bets: use the manual fields below.)
-        <div class="lb-row" style="margin-top:10px">
-          <select id="coGame"><option value="">choose game…</option></select>
-          <select id="coSel"><option value="">side…</option></select>
-          <input id="coLiveEntry" type="number" step="0.01" min="0" max="1" placeholder="your entry ¢ (e.g. 0.40)" style="max-width:150px" />
-          <button id="coLivePull" class="btn primary">Pull live Kalshi price</button>
-        </div>
-        <div id="coLiveOut" class="sub" style="margin-top:8px"></div>
-      </div>
-      <div class="form-grid">
-        <label>Entry price (what you bought at)
-          <input id="coEntry" type="number" step="0.01" min="0" max="1" value="0.40" />
-        </label>
-        <label>Current sell price
-          <input id="coCurrent" type="number" step="0.01" min="0" max="1" value="0.55" />
-        </label>
-        <label>Model fair value now
-          <input id="coModel" type="number" step="0.01" min="0" max="1" value="0.42" />
-        </label>
-        <label>Stake ($)
-          <input id="coStake" type="number" step="1" min="0" value="100" />
-        </label>
-      </div>
-      <button id="evalCashout" class="btn primary">Check position</button>
-      <div id="cashoutResult" class="result-card"></div>
-    </section>
-
-    <!-- RECORD -->
-    <section id="record" class="panel">
-      <h2>My Record — the learning loop</h2>
-      <p class="muted">Every combo you log lands here. Tell it <b>Hit</b> or <b>Miss</b> and the model keeps score. Once 10+ are settled, it measures whether its combo confidence is real and auto-shrinks future estimates by your actual hit rate.</p>
-      <div id="recordStats" class="record-stats"></div>
-      <details class="manual-leg" id="manualBetBox">
-        <summary>➕ Log a past bet (already-finished games)</summary>
-        <p class="muted" style="margin:8px 0">The combo builder only has upcoming games. Use this to record a bet that already settled, so it counts toward your record.</p>
-        <div class="combo-add">
-          <input id="mbDesc" placeholder="What was the bet? (e.g. Netherlands -1.5 + Ecuador/Curaçao O1.5 + Germany/IC U4.5)" />
-        </div>
-        <div class="combo-add">
-          <input id="mbStake" type="number" step="1" min="0" placeholder="stake $" value="10" />
-          <input id="mbOdds" type="number" step="0.01" min="1" placeholder="combined odds (optional)" />
-          <select id="mbResult"><option value="miss">Missed ❌</option><option value="hit">Hit ✅</option></select>
-          <button id="mbAdd" class="btn primary">Add to record</button>
-        </div>
-      </details>
-      <h3 class="rec-h">Pending — settle these</h3>
-      <div id="pendingBets" class="bet-list"></div>
-      <h3 class="rec-h">Settled history</h3>
-      <div id="settledBets" class="bet-list"></div>
-    </section>
-
-    <!-- AUTO-BET -->
-    <section id="autobet" class="panel">
-      <h2>🤖 Auto-Bet</h2>
-      <div class="ab-warn">
-        <b>⚠️ This places bets automatically.</b> It starts in <b>PAPER mode</b> (simulated, no real money) so you can watch it before trusting it. The model's edge is <b>unproven</b> — keep stakes tiny. Hard ceilings (max stake &amp; daily cap) can never be exceeded.
-      </div>
-      <div class="ab-notify">🔔 Auto-bet &amp; cash-out alerts go to your ntfy topic: <b id="abTopic">—</b>
-        <button id="abTestPush" class="btn">Send test to my phone</button>
-        <button id="abPreview" class="btn">👀 Preview real game alerts</button>
-        <button id="abDiagnose" class="btn">🩺 Why am I not getting alerts?</button>
-        <div id="abDiagnoseOut" class="sub" style="margin-top:8px"></div>
-        <div class="sub">Subscribe to this exact topic in the free ntfy app to get the alerts.</div>
-      </div>
-      <div id="abStatus" class="record-stats"></div>
-      <div class="ab-form">
-        <label class="ab-toggle">Auto-bet is <select id="abEnabled"><option value="false">OFF</option><option value="true">ON</option></select></label>
-        <label>Mode <select id="abMode"><option value="paper">📝 Paper (simulated)</option><option value="live">💸 Live (real money)</option></select></label>
-        <label>Max stake per bet ($) <input id="abMaxStake" type="number" step="1" min="0" /></label>
-        <label>Daily cap ($) <input id="abDailyCap" type="number" step="1" min="0" /></label>
-        <label>Min edge to fire (%) <input id="abMinEdge" type="number" step="1" min="3" /></label>
-        <label>Max bets per day <input id="abMaxBets" type="number" step="1" min="0" /></label>
-      </div>
-      <button id="abSave" class="btn primary">Save settings</button>
-      <button id="abVerify" class="btn">🔌 Verify Kalshi connection</button>
-      <button id="abTestOrder" class="btn">🧪 Test live order (~$1)</button>
-      <div id="abVerifyOut" class="sub"></div>
-      <h3 class="rec-h">Auto-bet log</h3>
-      <div id="abLog" class="bet-list"></div>
-    </section>
-
-    <section id="weather" class="panel">
-      <h2>🌡️ Weather Markets <span class="muted" style="font-size:13px">— Kalshi daily-high temps vs the NWS forecast</span></h2>
-      <div class="ab-warn">
-        <b>How the edge works:</b> the model turns the official NWS high-temp forecast into a probability
-        for each Kalshi temperature contract, then flags where the market price disagrees. Separate from
-        the World Cup engine. <b>The weather edge is UNPROVEN</b> — it skips today's markets (already
-        half-decided), shrinks toward the market on big disagreements, and ignores thin/penny books.
-        Paper-test before trusting it. Settles on each city's official station; our forecast point is approximate.
-      </div>
-      <div id="weatherStatus" class="sub" style="margin:10px 0">Loading forecasts + order books…</div>
-      <h3 class="rec-h">✅ Value bets (model beats the market)</h3>
-      <div id="weatherValue" class="bet-list"></div>
-      <div id="weatherCalib" class="ab-warn" style="margin-top:14px"></div>
-      <h3 class="rec-h">All priced contracts</h3>
-      <div id="weatherAll" class="bet-list"></div>
-    </section>
-  </main>
-
-  <footer class="disclaimer">
-    Alpha Markets AI surfaces mathematical edge (vig-removal, expected value, Kelly sizing). It does not predict the future and cannot guarantee outcomes. Bet only what you can afford to lose. For 18+/21+ where legal.
-  </footer>
-
-  <script src="/static/app.js?v=16"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

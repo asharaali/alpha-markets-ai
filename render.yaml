@@ -1,12 +1,15 @@
-# Render deployment blueprint for Alpha Markets AI.
-# In the Render dashboard: New + → Blueprint → connect this repo. It reads this file.
-# You'll be prompted to enter ODDS_API_KEY (kept secret, not in the repo).
+# Render blueprint for Alpha Markets.
+# Dashboard: New + → Blueprint → connect this repo. Render reads this file.
+#
+# Nothing here is required for the app to work: the research side runs entirely on free,
+# unauthenticated data (nflverse, Kalshi market data, Open-Meteo). Kalshi credentials are
+# only needed to place real orders, and are entered in the dashboard, never committed.
 services:
   - type: web
-    name: alpha-markets-ai
+    name: alpha-markets
     runtime: python
     rootDir: backend
-    plan: starter            # $7/mo, always-on (notifications run 24/7)
+    plan: starter                # always-on, so the snapshot job can record line movement
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
@@ -14,23 +17,55 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.7"
-      - key: DEMO_MODE
-        value: "false"
-      - key: ODDS_API_KEY
-        sync: false          # you paste this into the dashboard (stays secret)
-      - key: ODDS_REGIONS
-        value: us
-      - key: ODDS_CACHE_TTL
-        value: "3600"
-      - key: NTFY_TOPIC
-        value: alpha-markets-ashar-x7k2
-      - key: NOTIFY_ENABLED
-        value: "true"
       - key: DATA_DIR
         value: /var/data
+      - key: LOG_LEVEL
+        value: INFO
+
+      # ---- background jobs ----
+      # The snapshot job is what makes line movement and closing-line value possible.
+      # There is no way to backfill prices later, so leave this on.
+      - key: JOBS_ENABLED
+        value: "true"
+      - key: MARKET_SNAPSHOT_INTERVAL
+        value: "600"
+      - key: GRADING_INTERVAL
+        value: "1800"
+
+      # ---- model fitting ----
+      # Each season is roughly a 19MB download on first boot.
+      - key: CALIBRATION_SEASONS
+        value: "6"
+      - key: HISTORY_SEASONS
+        value: "3"
+
+      # ---- risk defaults ----
+      - key: DEFAULT_BANKROLL
+        value: "1000"
+      - key: KELLY_FRACTION
+        value: "0.25"
+
+      # ---- live trading: OFF unless you deliberately turn it on ----
+      - key: LIVE_TRADING_ENABLED
+        value: "false"
+      - key: LIVE_TRADING_USER
+        sync: false              # set to your login username to enable live orders
+      - key: HARD_MAX_STAKE
+        value: "25"
+      - key: HARD_DAILY_CAP
+        value: "100"
+      - key: KALSHI_KEY_ID
+        sync: false              # paste in the dashboard; stays out of the repo
+      - key: KALSHI_PRIVATE_KEY
+        sync: false
+
+      # ---- optional sportsbook cross-check ----
+      - key: ODDS_API_KEY
+        sync: false
+
       - key: SITE_SECRET
-        generateValue: true     # stable random secret for signing login cookies
+        generateValue: true      # stable random secret for signing login cookies
     disk:
       name: data
-      mountPath: /var/data    # $1/mo, keeps your bet history across restarts
-      sizeGB: 1
+      mountPath: /var/data       # holds the SQLite database, feed cache and accounts
+      sizeGB: 5                  # play-by-play cache is a few hundred MB

@@ -1,18 +1,21 @@
 # Secrets — never commit
 backend/.env
+backend/.env.local
 
 # Python
 backend/.venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Runtime data: SQLite database, downloaded feeds, fitted model artifacts, accounts
+backend/data/
+backend/static/**/*.map
+
+# Local tooling
+bin/
+node_modules/
+*.log
 
 # OS
 .DS_Store
-
-# Local-only runtime + tools (not for the cloud repo)
-bin/
-backend/data/bet_log.json
-*.log
-
-# All runtime user data (accounts, bets, secrets) — never commit
-backend/data/
