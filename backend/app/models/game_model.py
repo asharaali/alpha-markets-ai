@@ -103,10 +103,36 @@ class GameProjection:
             "most_likely_margins": [
                 {"margin": m, "prob": round(p, 4)} for m, p in self.margin.top_outcomes(6)
             ],
+            # The distributions themselves, trimmed to the region carrying the mass. The
+            # chart needs the shape, not just the top few outcomes — seeing the spikes at
+            # 3 and 7 is the whole point of modelling them.
+            "margin_distribution": _serialise(self.margin),
+            "total_distribution": _serialise(self.total),
             "drivers": self.drivers,
             "adjustments": {k: round(v, 3) for k, v in self.adjustments.items()},
             "confidence": round(self.confidence, 3),
         }
+
+
+def _serialise(distribution: dist.DiscreteDistribution,
+               floor: float = 0.0008) -> Dict[str, object]:
+    """A distribution shaped for the wire: trimmed tails, rounded mass.
+
+    The full support runs five standard deviations either side, most of which is
+    indistinguishable from zero and would trip the payload size for no benefit.
+    """
+    mass = distribution.mass
+    start, end = 0, len(mass) - 1
+    while start < end and mass[start] < floor:
+        start += 1
+    while end > start and mass[end] < floor:
+        end -= 1
+    return {
+        "low": distribution.low + start,
+        "mass": [round(m, 5) for m in mass[start:end + 1]],
+        "mean": round(distribution.mean(), 2),
+        "stdev": round(distribution.stdev(), 2),
+    }
 
 
 def _driver_rows(rs: RatingSet, game: Game) -> List[Dict[str, object]]:

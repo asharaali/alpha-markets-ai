@@ -78,6 +78,10 @@ def movement_for(ticker: str, current_mid: Optional[float]) -> Optional[Dict[str
     opened = mids[0] if mids else current_mid
     return {
         "ticker": ticker,
+        # The mid at each stored snapshot, thinned to a sparkline-sized series. Sending the
+        # full history would be hundreds of points per contract for a 300px chart.
+        "series": [{"captured_at": r["captured_at"], "mid": r["mid"]}
+                   for r in history[:: max(1, len(history) // 60)] if r.get("mid") is not None],
         "current": round(current_mid, 4),
         "first_seen": round(opened, 4),
         "since_open": round(current_mid - opened, 4),

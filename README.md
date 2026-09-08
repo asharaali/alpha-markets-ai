@@ -171,7 +171,16 @@ would have meant a 200MB dependency tree and a wheel-availability gamble on Pyth
 save about a second per season. Reducing 50,000 plays takes 0.9s.
 
 **No frontend build step.** ES modules served directly. The design system is one CSS file
-of custom properties; the charts are hand-written inline SVG that inherits the theme.
+of custom properties; the charts are hand-written inline SVG that inherits the theme. With
+no bundler there is no content hashing, so asset URLs carry an explicit `?v=` stamp — bump
+it in `static/index.html` and the `js/*.js` imports when you change CSS or JS, or browsers
+will happily run last week's frontend against this week's API.
+
+**Player props load on request.** Every Kalshi contract needs its own order-book read, and a
+single game carries roughly 210 props on top of its 23 game lines. Loading them with the
+page took 20 seconds (and the whole slate's props, before the game view was scoped to one
+game, took 126). The game page loads its lines in about a second and fetches props behind a
+button.
 
 **The look-ahead guarantee is structural, not a promise.** To predict week N, the backtester
 calls the same `ratings.build(season, N)` the live app calls, and that function reads

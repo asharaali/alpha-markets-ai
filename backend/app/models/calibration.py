@@ -119,15 +119,28 @@ class GameModelArtifact:
             "total_diagnostics": self.total_diagnostics,
             "key_numbers": {
                 "games": self.key_number_games,
-                "margin_top": _top_profile(self.margin_profile()),
-                "total_top": _top_profile(self.total_profile()),
+                "margin_top": _top_profile(self.margin_profile(), MARGIN_KEY_NUMBERS),
+                "total_top": _top_profile(self.total_profile(), TOTAL_KEY_NUMBERS),
             },
         }
 
 
-def _top_profile(profile: Dict[int, float], n: int = 8) -> List[Tuple[int, float]]:
-    items = sorted(profile.items(), key=lambda kv: kv[1], reverse=True)[:n]
-    return [(k, round(v, 3)) for k, v in items]
+# The outcomes football actually clusters on. Sorting the whole profile by multiplier
+# instead surfaces rare tail values (a total of 88) whose ratio is noise, and buries the
+# numbers a bettor cares about.
+MARGIN_KEY_NUMBERS = [3, -3, 7, -7, 6, -6, 10, -10, 14, -14, 4, -4, 1, -1, 0]
+TOTAL_KEY_NUMBERS = [37, 41, 43, 44, 47, 51, 33, 34, 38, 40, 45, 48, 50, 54]
+
+
+def _top_profile(profile: Dict[int, float], keys: Optional[Sequence[int]] = None,
+                 n: int = 10) -> List[Tuple[int, float]]:
+    """The fitted multiplier at each football key number, strongest first."""
+    if keys is None:
+        items = sorted(profile.items(), key=lambda kv: kv[1], reverse=True)[:n]
+        return [(k, round(v, 3)) for k, v in items]
+    present = [(k, profile[k]) for k in keys if k in profile]
+    present.sort(key=lambda kv: kv[1], reverse=True)
+    return [(k, round(v, 3)) for k, v in present[:n]]
 
 
 # --------------------------------------------------------------------- predictors

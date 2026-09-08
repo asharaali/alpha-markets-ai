@@ -4,9 +4,9 @@ import {
   api, el, frag, panel, stat, statRow, badge, table, loading, emptyState, errorState,
   notice, probRow, disclosure, confidenceBadge, pct, signedPct, num, signed, money,
   cents, kickoffLabel, relativeTime, evClass, get,
-} from "./core.js";
-import { equityChart, distributionChart, movementChart, splitBar, rankBars } from "./charts.js";
-import { parlayCard } from "./views-portfolio.js";
+} from "./core.js?v=2.0.6";
+import { equityChart, distributionChart, movementChart, splitBar, rankBars } from "./charts.js?v=2.0.6";
+import { parlayCard } from "./views-portfolio.js?v=2.0.6";
 
 const teamAbbr = (g, side) => g?.[side] ?? "?";
 
@@ -179,8 +179,15 @@ export async function games(mount, { navigate }) {
 export async function gameDetail(mount, { navigate, params }) {
   mount.replaceChildren(loading(8));
   let g;
-  try { g = await api(`/api/games/${encodeURIComponent(params.gameId)}`); }
-  catch (err) { mount.replaceChildren(errorState(err, () => gameDetail(mount, { navigate, params }))); return; }
+  try {
+    // Game lines only. Player props mean an order-book read per contract — around 210 more
+    // for a single game — which turns a one-second page into a twenty-second one. They are
+    // fetched on demand instead.
+    g = await api(`/api/games/${encodeURIComponent(params.gameId)}?include_props=false`);
+  } catch (err) {
+    mount.replaceChildren(errorState(err, () => gameDetail(mount, { navigate, params })));
+    return;
+  }
 
   const proj = g.projection;
   const base = g.base_projection;
@@ -216,8 +223,12 @@ export async function gameDetail(mount, { navigate, params }) {
     ),
 
     el("div", { class: "grid cols-2" },
-      panel("Margin distribution", { sub: "key numbers shaded darker" },
-        distributionChart(proj, { marker: null }) ,
+      panel("Margin distribution", { sub: "home margin · key numbers shaded darker" },
+        distributionChart(proj.margin_distribution, {
+          marker: g.game.spread_line ?? null,
+          markerLabel: g.game.spread_line != null
+            ? `Closing consensus line ${signed(g.game.spread_line, 1)}` : "",
+        }),
         el("div", { class: "prose", style: "margin-top:10px" },
            `A margin of exactly 3 is far more likely than a smooth model implies, which is why `
          + `a −2.5 and a −3.5 are priced differently here. Most likely margins: `
@@ -227,7 +238,15 @@ export async function gameDetail(mount, { navigate, params }) {
         splitBar(proj.win_probability.home, proj.win_probability.away, home.name, away.name),
         el("div", { class: "prose", style: "margin-top:12px" },
           `Ties carry ${pct(proj.win_probability.tie, 2)} and void the Kalshi moneyline, so the `
-        + `two sides above are renormalised over decisive outcomes.`))),
+        + `two sides above are renormalised over decisive outcomes.`),
+        el("hr", { class: "rule" }),
+        el("div", { class: "stat-label", text: "Total points distribution" }),
+        distributionChart(proj.total_distribution, {
+          height: 120,
+          marker: g.game.total_line ?? null,
+          markerLabel: g.game.total_line != null
+            ? `Closing consensus total ${num(g.game.total_line, 1)}` : "",
+        }))),
 
     adj.reasons.length || adj.margin_shift || adj.total_shift
       ? panel("Adjustments applied", { sub: `${signed(adj.margin_shift, 1)} pts margin · ${signed(adj.total_shift, 1)} pts total` },
@@ -277,6 +296,10 @@ export async function gameDetail(mount, { navigate, params }) {
           ], g.mispricing.violations))
       : null,
 
+    lineMovementPanel(g),
+
+    playerPropsPanel(params.gameId),
+
     panel("Model reasoning", { sub: "largest rating gaps" },
       rankBars((proj.drivers || []).slice(0, 8).map((d) => ({
         label: d.edge_to, value: d.edge_to === g.game.home ? d.gap : -d.gap,
@@ -300,6 +323,95 @@ export async function gameDetail(mount, { navigate, params }) {
             "Predictions are written by the background job every few minutes.")),
   ));
 }
+
+function playerPropsPanel(gameId) {
+  const body = el("div", {},
+    el("div", { class: "prose" },
+      "Player props are priced on request. Each contract needs its own order-book read and "
+    + "a game carries a couple of hundred of them, so loading them with the page would cost "
+    + "about twenty seconds."),
+    el("div", { style: "margin-top:12px" },
+      el("button", { class: "btn primary", text: "Load player props", onClick: load })));
+
+  async function load(event) {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "Reading order books…";
+    try {
+      const data = await api(`/api/games/${encodeURIComponent(gameId)}?include_props=true`);
+      const props = (data.ensemble || []).filter((s) => s.player);
+      const priced = props.filter((s) => s.quote && s.quote.cost !== null);
+      if (!priced.length) {
+        body.replaceChildren(emptyState("No priced player props",
+          "Kalshi lists props for this game but none has a readable order book right now."));
+        return;
+      }
+      priced.sort((a, b) => (b.ev_per_dollar ?? -9) - (a.ev_per_dollar ?? -9));
+      body.replaceChildren(
+        notice("Props are shown for <strong>reference</strong> unless the player is a "
+             + "confirmed starter with measured history and no injury designation — and even "
+             + "then they are held to roughly double the edge threshold of a game line. The "
+             + "model does not know this week's game plan."),
+        table([
+          { label: "Player", key: "player" },
+          { label: "Type", render: (s) => s.market_type.replace(/_/g, " ") },
+          { label: "Contract", key: "label" },
+          { label: "Model raw", num: true,
+            render: (s) => pct(s.features?.raw_model_prob ?? s.model_prob) },
+          { label: "Market", num: true, render: (s) => pct(s.market_prob) },
+          { label: "Fair", num: true, render: (s) => pct(s.features?.fair_prob ?? s.model_prob) },
+          { label: "Edge", num: true, cls: (s) => evClass(s.edge), render: (s) => signedPct(s.edge) },
+          { label: "EV", num: true, cls: (s) => evClass(s.ev_per_dollar),
+            render: (s) => signedPct(s.ev_per_dollar) },
+          { label: "Conf", render: (s) => badge(s.confidence, s.confidence) },
+        ], priced.slice(0, 60)),
+        el("div", { class: "prose", style: "margin-top:10px" },
+          "\u201cModel raw\u201d is the projection's own probability. \u201cFair\u201d is that "
+        + "blended toward the traded price, and it is what the edge is computed from — the "
+        + "blend weight is deliberately low because the backtest says the model has not "
+        + "earned the right to override a price."));
+    } catch (err) {
+      body.replaceChildren(errorState(err));
+    }
+  }
+
+  return panel("Player props", { sub: "loaded on request" }, body);
+}
+
+
+function lineMovementPanel(g) {
+  // Only contracts we have actually watched move are worth a sparkline; the rest would be
+  // a flat line saying nothing.
+  const moved = (g.line_movement || [])
+    .filter((m) => m.samples > 2 && Math.abs(m.since_open) >= 0.01)
+    .sort((a, b) => Math.abs(b.since_open) - Math.abs(a.since_open))
+    .slice(0, 6);
+
+  if (!moved.length) {
+    return panel("Line movement", { sub: "from our own stored snapshots" },
+      emptyState("No movement recorded for this game yet",
+        "Prices are snapshotted every few minutes. Movement appears once a contract has "
+      + "been watched long enough to have moved."));
+  }
+
+  const byTicker = new Map((g.markets || []).map((m) => [m.ticker, m]));
+  return panel("Line movement", { sub: `${moved.length} contracts that have moved` },
+    el("div", { class: "grid cols-3" },
+      ...moved.map((m) => {
+        const quote = byTicker.get(m.ticker);
+        return el("div", {},
+          el("div", { class: "stat-label", text: quote?.label || m.ticker }),
+          el("div", { class: "kv", style: "margin:4px 0 6px" },
+            el("dt", { text: "Now" }), el("dd", { text: pct(m.current, 0) }),
+            el("dt", { text: "Since open" }),
+            el("dd", { class: evClass(m.since_open), text: signedPct(m.since_open) }),
+            el("dt", { text: "Range" }),
+            el("dd", { text: `${pct(m.low, 0)}–${pct(m.high, 0)}` })),
+          movementChart(m.series || []) || el("div", { class: "mono-sm",
+            text: `${m.samples} snapshots` }));
+      })));
+}
+
 
 function injuryBlock(g) {
   const rows = [...(g.injuries.home || []).map((r) => ({ ...r, side: g.game.home })),

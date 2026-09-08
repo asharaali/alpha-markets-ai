@@ -3,8 +3,8 @@
 import {
   api, el, frag, panel, stat, statRow, badge, table, loading, emptyState, errorState,
   notice, disclosure, pct, signedPct, num, money, evClass, get, relativeTime,
-} from "./core.js";
-import { equityChart, calibrationChart, rankBars } from "./charts.js";
+} from "./core.js?v=2.0.6";
+import { equityChart, calibrationChart, rankBars } from "./charts.js?v=2.0.6";
 
 /* ----------------------------------------------------------------- strategies */
 
@@ -92,7 +92,8 @@ export async function modelLab(mount) {
       ], data.pipeline)),
 
     el("div", { class: "grid cols-2" },
-      panel("Margin model coefficients", { sub: "shrunk by how well the data supports them", flush: true },
+      panel("Margin model coefficients", {
+        sub: "shrunk by how well the data supports them", flush: true },
         table([
           { label: "Feature", render: (d) => d.feature.replace(/_/g, " ") },
           { label: "Estimate", num: true, render: (d) => num(d.estimate, 3) },
@@ -112,19 +113,30 @@ export async function modelLab(mount) {
           { label: "", render: (d) => (d.supported ? badge("supported", "high") : badge("weak", "reference")) },
         ], a.total_diagnostics || []))),
 
+    notice("Coefficients marked <strong>weak</strong> are shrunk toward zero in proportion to "
+         + "their t-statistic, so a factor the data cannot distinguish from noise cannot move "
+         + "a projection. The intercept is never shrunk — where its shipped value differs "
+         + "from its estimate, that is the re-centering that keeps predictions unbiased after "
+         + "the other coefficients were shrunk."),
+
     panel("Key numbers", { sub: `fitted from ${a.key_numbers.games} historical games with closing lines` },
       el("div", { class: "prose" },
-        "How much more often each exact outcome lands than a smooth model predicts. These "
-      + "multipliers are why a −2.5 and a −3.5 are priced differently."),
+        "How much more often each exact outcome lands than a smooth model predicts, at the "
+      + "numbers football actually clusters on. These multipliers are why a −2.5 and a −3.5 "
+      + "are priced differently."),
       el("div", { class: "grid cols-2", style: "margin-top:12px" },
         el("div", {},
-          el("div", { class: "stat-label", text: "Margin" }),
+          el("div", { class: "stat-label", text: "Margin — multiplier vs a smooth model" }),
+          // The bar encodes how far above (or below) 1.0 the multiplier sits; the printed
+          // value is the multiplier itself, so "2.52x" cannot be misread as 1.52x.
           rankBars((a.key_numbers.margin_top || []).map(([k, v]) =>
-            ({ label: String(k), value: v - 1 })))),
+            ({ label: String(k), value: v - 1, multiplier: v })),
+            { format: (r) => `${num(r.multiplier, 2)}\u00d7` })),
         el("div", {},
-          el("div", { class: "stat-label", text: "Total" }),
+          el("div", { class: "stat-label", text: "Total — multiplier vs a smooth model" }),
           rankBars((a.key_numbers.total_top || []).map(([k, v]) =>
-            ({ label: String(k), value: v - 1 })))))),
+            ({ label: String(k), value: v - 1, multiplier: v })),
+            { format: (r) => `${num(r.multiplier, 2)}\u00d7` })))),
 
     panel("Power ratings", { sub: `net EPA per play, opponent-adjusted, as of week ${r.as_of.week}`, flush: true },
       table([

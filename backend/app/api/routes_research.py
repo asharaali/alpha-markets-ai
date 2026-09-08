@@ -66,8 +66,13 @@ async def slate(week: Optional[int] = None, season: Optional[int] = None):
 
 @router.get("/api/games/{game_id}")
 async def game_detail(game_id: str, include_props: bool = Query(default=True)):
-    """Everything the system knows about one game."""
-    analysis = await engine.cached_analysis(include_props=include_props)
+    """Everything the system knows about one game.
+
+    Scoped to this game rather than reusing the slate analysis: with player props included
+    the slate-wide path prices every prop on every game, which is thousands of order-book
+    reads to render a single page.
+    """
+    analysis = await engine.game_analysis(game_id, include_props=include_props)
     ctx = analysis.contexts.get(game_id)
     if ctx is None:
         raise NotFound(f"no analysis available for game {game_id}")

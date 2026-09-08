@@ -43,16 +43,24 @@ export const pct = (v, digits = 1) =>
 
 export const signedPct = (v, digits = 1) => {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
-  const s = (v * 100).toFixed(digits);
-  return `${v > 0 ? "+" : ""}${s}%`;
+  const rounded = Number((v * 100).toFixed(digits));
+  const safe = rounded === 0 ? 0 : rounded;
+  return `${safe > 0 ? "+" : ""}${safe.toFixed(digits)}%`;
 };
 
-export const num = (v, digits = 2) =>
-  v === null || v === undefined || Number.isNaN(v) ? "—" : Number(v).toFixed(digits);
+export const num = (v, digits = 2) => {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  const rounded = Number(Number(v).toFixed(digits));
+  // A value that rounds to zero should print as 0, not -0.000.
+  return (rounded === 0 ? 0 : rounded).toFixed(digits);
+};
 
 export const signed = (v, digits = 1) => {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
-  return `${v > 0 ? "+" : ""}${Number(v).toFixed(digits)}`;
+  const rounded = Number(Number(v).toFixed(digits));
+  // Without this, a value of -0.04 formats as "-0.0", which reads as a negative zero.
+  const safe = rounded === 0 ? 0 : rounded;
+  return `${safe > 0 ? "+" : ""}${safe.toFixed(digits)}`;
 };
 
 export const money = (v) =>
@@ -204,7 +212,9 @@ export function confidenceBadge(level) {
 export function probRow(modelProb, marketProb, edge) {
   return el("div", { class: "probrow" },
     el("div", { class: "probcell" },
-      el("div", { class: "k", text: "Model" }),
+      // Labelled "fair" rather than "model" because it is the model blended toward the
+      // traded price. The card shows the model's own unblended number separately.
+      el("div", { class: "k", text: "Fair" }),
       el("div", { class: "v", text: pct(modelProb) })),
     el("div", { class: "probcell" },
       el("div", { class: "k", text: "Market" }),

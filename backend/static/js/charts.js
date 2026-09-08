@@ -9,7 +9,7 @@
  * dependency, works offline, and inherits the theme through CSS variables.
  */
 
-import { el, pct, num } from "./core.js";
+import { el, pct, num } from "./core.js?v=2.0.6";
 
 const NS = "http://www.w3.org/2000/svg";
 
@@ -81,7 +81,7 @@ export function calibrationChart(rows, { height = 230 } = {}) {
   const maxN = Math.max(...populated.map((r) => r.n));
 
   return el("div", {},
-    svg("svg", { class: "chart", viewBox: `0 0 ${width} ${height}`, role: "img",
+    svg("svg", { class: "chart square", viewBox: `0 0 ${width} ${height}`, role: "img",
                  "aria-label": "Model calibration: predicted probability versus observed frequency" },
       svg("line", { class: "refline", x1: x(0), y1: y(0), x2: x(1), y2: y(1) }),
       svg("line", { class: "axis", x1: pad, y1: y(0), x2: width - 12, y2: y(0) }),
@@ -135,8 +135,12 @@ export function distributionChart(dist, { height = 150, marker = null, markerLab
         }, svg("title", {}, document.createTextNode(`${value}: ${pct(m, 2)}`)));
       }),
       marker !== null && marker >= low + start && marker <= low + end
-        ? svg("line", { class: "refline", x1: x(marker), x2: x(marker),
-                        y1: pad.top, y2: height - pad.bottom, stroke: "var(--warn)" })
+        // Inline style, not a presentation attribute: SVG attributes lose to any CSS rule,
+        // so `class="refline"` was repainting this marker in the dim axis colour and the
+        // legend swatch promised an amber line the chart never drew.
+        ? svg("line", { x1: x(marker), x2: x(marker),
+                        y1: pad.top, y2: height - pad.bottom,
+                        style: "stroke:var(--warn);stroke-width:1.5;stroke-dasharray:4 3" })
         : null,
       ...slice.filter((_, i) => i % labelEvery === 0).map((_, i) => {
         const value = low + start + i * labelEvery;
@@ -186,22 +190,34 @@ export function splitBar(homeProb, awayProb, homeLabel, awayLabel) {
 }
 
 /** Ranked horizontal bars — used for rating comparisons where order is the message. */
-export function rankBars(rows, { valueKey = "value", labelKey = "label", height = 14 } = {}) {
+export function rankBars(rows, { valueKey = "value", labelKey = "label", height = 14,
+                                 digits = 3, format = null } = {}) {
   if (!rows.length) return el("div");
-  const max = Math.max(...rows.map((r) => Math.abs(r[valueKey]))) || 1;
+  const values = rows.map((r) => r[valueKey]);
+  const max = Math.max(...values.map(Math.abs)) || 1;
+  // A centred axis only earns its space when values actually go both ways. When they are
+  // all one sign, centring throws away half the width and makes every bar look shorter
+  // than it is.
+  const diverging = Math.min(...values) < 0 && Math.max(...values) > 0;
+  const span = diverging ? 50 : 100;
+
   return el("div", { style: "display:flex;flex-direction:column;gap:4px" },
     ...rows.map((r) => {
       const v = r[valueKey];
-      const width = (Math.abs(v) / max) * 50;
+      const width = (Math.abs(v) / max) * span;
+      const left = diverging ? (v >= 0 ? 50 : 50 - width) : 0;
       return el("div", { style: "display:grid;grid-template-columns:46px 1fr 62px;gap:8px;align-items:center" },
         el("span", { class: "mono-sm", text: r[labelKey] }),
         el("div", { style: `height:${height}px;position:relative;background:var(--bg-raised);border-radius:3px` },
           el("div", {
-            style: `position:absolute;top:0;bottom:0;left:${v >= 0 ? 50 : 50 - width}%;`
+            style: `position:absolute;top:0;bottom:0;left:${left}%;`
                  + `width:${width}%;border-radius:2px;`
                  + `background:${v >= 0 ? "var(--pos)" : "var(--neg)"};opacity:.8`,
           }),
-          el("div", { style: "position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--border-strong)" })),
-        el("span", { class: "num dim", style: "font-size:11px;text-align:right", text: num(v, 3) }));
+          diverging
+            ? el("div", { style: "position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--border-strong)" })
+            : null),
+        el("span", { class: "num dim", style: "font-size:11px;text-align:right",
+                     text: format ? format(r) : num(v, digits) }));
     }));
 }

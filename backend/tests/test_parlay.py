@@ -213,7 +213,15 @@ class TestBuild:
     def test_empty_board_returns_an_explanation_not_a_parlay(self, simulator, homes):
         result = build([], simulator, homes, category_key="balanced")
         assert result["parlays"] == []
-        assert "clear the value gate" in result["note"]
+        assert "value gate" in result["note"]
+        # An empty board must not read like a bug ("Only 0 leg(s)...").
+        assert "0 leg" not in result["note"]
+
+    def test_a_single_qualifying_leg_is_described_in_the_singular(self, simulator, homes):
+        legs = [make_signal("a", game_id=GAME_A, team="KC", model_prob=0.66, cost=0.55)]
+        result = build(legs, simulator, homes, category_key="balanced")
+        assert result["parlays"] == []
+        assert "1 leg on this board" in result["note"]
 
     def test_non_value_legs_are_never_used(self, simulator, homes):
         legs = [make_signal("a", game_id=GAME_A, team="KC", value=False),

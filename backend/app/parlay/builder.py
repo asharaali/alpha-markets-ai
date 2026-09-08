@@ -286,10 +286,14 @@ def build(signals: Sequence[Signal], simulator: SlateSimulator,
             "category": category.key, "name": category.name,
             "description": category.description, "parlays": [],
             "note": (
-                f"Only {len(pool)} leg(s) on this board clear the value gate at the "
-                f"'{category.name}' risk level, and this parlay needs at least "
-                f"{category.min_legs}. Padding it with legs the model does not rate would "
-                "make the parlay look better and pay worse — so there is nothing here."),
+                (f"Nothing on this board clears the value gate at the '{category.name}' "
+                 f"risk level."
+                 if not pool else
+                 f"Only {len(pool)} leg{'' if len(pool) == 1 else 's'} on this board clear "
+                 f"the value gate at the '{category.name}' risk level, and this parlay "
+                 f"needs at least {category.min_legs}.")
+                + " Padding it with legs the model does not rate would make the parlay look "
+                  "better and pay worse — so there is nothing here."),
         }
 
     ranked: List[Tuple[float, Parlay]] = []

@@ -97,6 +97,11 @@
 
 * { box-sizing: border-box; }
 
+/* The browser's own [hidden] rule is display:none at the same specificity as a class
+   selector, so any component that sets its own display (the login overlay sets flex) wins
+   the tie and stays visible while marked hidden. Force it. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0; padding: 0;
   background: var(--bg);
@@ -156,6 +161,9 @@ a:hover { text-decoration: underline; }
   font-family: var(--mono); font-size: 11px; color: var(--text-dim);
   background: var(--surface); border-radius: 10px; padding: 1px 7px;
 }
+/* An empty count still paints its background and padding, which put a meaningless grey
+   pill beside every navigation item. */
+.nav-count:empty { display: none; }
 .nav a.active .nav-count { background: transparent; color: var(--accent); }
 
 .sidebar-foot {
@@ -374,6 +382,9 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
 
 /* ------------------------------------------------------------------- charts */
 .chart { width: 100%; display: block; overflow: visible; }
+/* Square-ish charts scale to their container width, which on a wide panel blows a 340pt
+   viewBox up to 600px tall. Cap the ones whose aspect ratio is near 1. */
+.chart.square { max-width: 420px; margin: 0 auto; }
 .chart text { font-family: var(--mono); font-size: 9px; fill: var(--text-dim); }
 .chart .axis { stroke: var(--border); stroke-width: 1; }
 .chart .gridline { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.6; }

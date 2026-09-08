@@ -1,9 +1,9 @@
 /* Application shell: routing, session, and the persistent chrome. */
 
-import { api, el, relativeTime, pct } from "./core.js";
-import { dashboard, games, gameDetail, predictions, markets } from "./views-research.js";
-import { strategies, modelLab, performance, backtests } from "./views-model.js";
-import { parlays, portfolio, settings, applyTheme } from "./views-portfolio.js";
+import { api, el, relativeTime, pct } from "./core.js?v=2.0.6";
+import { dashboard, games, gameDetail, predictions, markets } from "./views-research.js?v=2.0.6";
+import { strategies, modelLab, performance, backtests } from "./views-model.js?v=2.0.6";
+import { parlays, portfolio, settings, applyTheme } from "./views-portfolio.js?v=2.0.6";
 
 const ROUTES = [
   { path: "#/", title: "Dashboard", group: "Overview", view: dashboard, nav: true },
@@ -49,7 +49,7 @@ function buildNav() {
       href: route.path,
       class: location.hash === route.path ? "active" : "",
       dataset: { path: route.path },
-    }, route.title, el("span", { class: "nav-count", id: `count-${route.path.slice(2)}` })));
+    }, route.title));
   }
 }
 
@@ -94,10 +94,9 @@ async function refreshStatus() {
         calibrating ? "Model calibrating" : "Live"),
       el("span", { class: "mono-sm", text: `Week ${health.week ?? "—"} · ${health.season}` }),
       el("span", { class: "mono-sm",
-        text: `${health.database.predictions} predictions recorded` }),
+        text: `${health.database.predictions.toLocaleString()} predictions recorded, `
+            + `${health.database.settled_predictions.toLocaleString()} settled` }),
       el("span", { class: "mono-sm", text: `v${health.version}` }));
-    const badgeEl = document.getElementById("count-predictions");
-    if (badgeEl && health.database.predictions) badgeEl.textContent = String(health.database.predictions);
   } catch {
     foot.replaceChildren(el("span", { class: "status-dot bad" }), "server unreachable");
     meta.replaceChildren(el("span", { class: "neg", text: "Server unreachable" }));

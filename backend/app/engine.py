@@ -277,6 +277,7 @@ async def analyze(*, season: Optional[int] = None, week: Optional[int] = None,
 
 
 _analysis_cache = AsyncTTLCache(ttl=180, stale_ttl=1800, name="analysis")
+_game_cache = AsyncTTLCache(ttl=180, stale_ttl=1800, name="game-analysis")
 
 
 async def cached_analysis(*, include_props: bool = False,
@@ -296,8 +297,42 @@ async def cached_analysis(*, include_props: bool = False,
     return entry.value
 
 
+async def game_analysis(game_id: str, *, include_props: bool = True) -> SlateAnalysis:
+    """Analyse ONE game, pricing only that game's contracts.
+
+    A game page used to run the whole-slate analysis, which with player props meant reading
+    order books for every prop on every game — about 3,500 HTTP calls to render one page,
+    and 126 seconds on a cold cache. Scoping discovery to a single game cuts that to a few
+    hundred contracts, because a market that maps to a different game is dropped before it
+    is ever priced.
+    """
+    season, week = await current_week()
+    games = await nflverse.schedule(seasons=[season])
+    match = next((g for g in games if g.game_id == game_id), None)
+    if match is None:
+        # A game from an adjacent season (a January playoff) still has to resolve.
+        for other in (season - 1, season + 1):
+            games = await nflverse.schedule(seasons=[other])
+            match = next((g for g in games if g.game_id == game_id), None)
+            if match:
+                season = other
+                break
+    if match is None:
+        raise NotFound(f"no scheduled game with id {game_id}")
+
+    key = f"{game_id}:{int(include_props)}"
+    entry = await _game_cache.get(
+        key, lambda: analyze(season=match.season, week=match.week, games=[match],
+                             include_props=include_props))
+    if entry.stale:
+        entry.value.warnings.append(
+            "Showing the last successful analysis for this game — the live refresh failed.")
+    return entry.value
+
+
 def invalidate() -> None:
     _analysis_cache.invalidate()
+    _game_cache.invalidate()
     _ratings_cache.invalidate()
 
 
