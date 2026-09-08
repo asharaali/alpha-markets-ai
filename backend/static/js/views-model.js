@@ -3,8 +3,8 @@
 import {
   api, el, frag, panel, stat, statRow, badge, table, loading, emptyState, errorState,
   notice, disclosure, pct, signedPct, num, money, evClass, get, relativeTime,
-} from "./core.js?v=2.0.6";
-import { equityChart, calibrationChart, rankBars } from "./charts.js?v=2.0.6";
+} from "./core.js?v=2.0.7";
+import { equityChart, calibrationChart, rankBars } from "./charts.js?v=2.0.7";
 
 /* ----------------------------------------------------------------- strategies */
 

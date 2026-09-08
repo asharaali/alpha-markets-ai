@@ -98,9 +98,17 @@ async def health() -> Dict[str, Any]:
             "kalshi_trading": {"configured": kalshi_client.credentials_present(),
                                "requires_key": True},
             "open_meteo": {"configured": True, "requires_key": False},
-            "odds_api": {"configured": bool(settings.ODDS_API_KEY),
+            # Reported as NOT WIRED rather than "configured". A key being present in the
+            # environment is not the same as a data source being used, and a health
+            # endpoint that conflates the two is worse than one that omits the row.
+            "odds_api": {"configured": False,
+                         "key_present": bool(settings.ODDS_API_KEY),
                          "requires_key": True,
-                         "note": "Optional. Used only as a cross-check on Kalshi prices."},
+                         "note": ("A key is set but nothing reads it — the sportsbook "
+                                  "cross-check is not implemented yet. Setting this "
+                                  "changes nothing today."
+                                  if settings.ODDS_API_KEY else
+                                  "Not implemented yet.")},
         },
         "database": counts,
         "jobs": scheduler.status(),

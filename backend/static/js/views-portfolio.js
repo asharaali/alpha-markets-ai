@@ -3,8 +3,8 @@
 import {
   api, el, frag, panel, stat, statRow, badge, table, loading, emptyState, errorState,
   notice, disclosure, pct, signedPct, num, money, cents, evClass, get, relativeTime,
-} from "./core.js?v=2.0.6";
-import { equityChart } from "./charts.js?v=2.0.6";
+} from "./core.js?v=2.0.7";
+import { equityChart } from "./charts.js?v=2.0.7";
 
 /* -------------------------------------------------------------------- parlays */
 
@@ -314,8 +314,9 @@ export async function settings(mount, { navigate, session }) {
       table([
         { label: "Source", render: (s) => s.name.replace(/_/g, " ") },
         { label: "Status", render: (s) => (s.configured
-            ? badge("configured", "high")
-            : badge(s.requires_key ? "needs a key" : "unavailable", "warn")) },
+            ? badge("in use", "high")
+            : s.key_present ? badge("key set, not wired", "warn")
+            : badge(s.requires_key ? "needs a key" : "not wired", "reference")) },
         { label: "Key required", render: (s) => (s.requires_key ? "yes" : "no") },
         { label: "Note", render: (s) => s.note || (s.requires_key ? "" : "Free and public — no account needed.") },
       ], sources)),

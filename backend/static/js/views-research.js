@@ -4,9 +4,9 @@ import {
   api, el, frag, panel, stat, statRow, badge, table, loading, emptyState, errorState,
   notice, probRow, disclosure, confidenceBadge, pct, signedPct, num, signed, money,
   cents, kickoffLabel, relativeTime, evClass, get,
-} from "./core.js?v=2.0.6";
-import { equityChart, distributionChart, movementChart, splitBar, rankBars } from "./charts.js?v=2.0.6";
-import { parlayCard } from "./views-portfolio.js?v=2.0.6";
+} from "./core.js?v=2.0.7";
+import { equityChart, distributionChart, movementChart, splitBar, rankBars } from "./charts.js?v=2.0.7";
+import { parlayCard } from "./views-portfolio.js?v=2.0.7";
 
 const teamAbbr = (g, side) => g?.[side] ?? "?";
 

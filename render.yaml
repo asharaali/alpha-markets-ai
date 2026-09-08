@@ -65,9 +65,8 @@ services:
       - key: LIVE_TRADING_ENABLED
         value: "false"
 
-      # ---- optional sportsbook cross-check ----
-      - key: ODDS_API_KEY
-        sync: false
+      # No ODDS_API_KEY here on purpose: the sportsbook cross-check is not implemented,
+      # so setting it would change nothing. Add it when that feature lands.
 
       - key: SITE_SECRET
         generateValue: true      # stable random secret for signing login cookies
