@@ -1,6 +1,12 @@
-# Secrets — never commit
+# Secrets — never commit.
+# Deliberately broad: the credential installer writes timestamped .env backups, and one of
+# those backups holds the Kalshi private key. Listing only `.env` left them exposed to a
+# `git add -A`, which is precisely the mistake this pattern has to make impossible.
 backend/.env
-backend/.env.local
+backend/.env.*
+!backend/.env.example
+*.pem
+*.key
 
 # Python
 backend/.venv/

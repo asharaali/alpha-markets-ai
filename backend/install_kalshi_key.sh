@@ -28,7 +28,15 @@ if ! grep -q "BEGIN .*PRIVATE KEY" "$KEY_PATH"; then
 fi
 
 [ -f .env ] || cp .env.example .env
-cp .env ".env.backup.$(date +%Y%m%d%H%M%S)"
+
+# Back up the existing .env, but only ever to a path the gitignore already covers, and
+# lock it down immediately. A backup taken AFTER a previous successful install contains
+# the private key, so a stray `git add -A` would otherwise publish it.
+BACKUP=".env.backup.$(date +%Y%m%d%H%M%S)"
+cp .env "$BACKUP"
+chmod 600 "$BACKUP"
+# Keep only the two most recent backups; old copies of a rotated key are pure liability.
+ls -1t .env.backup.* 2>/dev/null | tail -n +3 | while read -r old; do rm -f "$old"; done
 
 # Fold the PEM into a single line with literal \n, which is what the config loader expects.
 PEM_ONELINE="$(awk 'BEGIN{ORS="\\n"} {print}' "$KEY_PATH")"
