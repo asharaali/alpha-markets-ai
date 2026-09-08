@@ -45,19 +45,25 @@ services:
       - key: KELLY_FRACTION
         value: "0.25"
 
-      # ---- live trading: OFF unless you deliberately turn it on ----
+      # ---- live trading: deliberately NOT available on the hosted instance ----
+      #
+      # No Kalshi credentials are configured here, and there is no env var to paste them
+      # into. That is the design, not an omission.
+      #
+      # What this deployment is FOR is the snapshot job: recording Kalshi order books
+      # around the clock so line movement and closing-line value can be measured at all.
+      # None of that needs an API key — Kalshi market data is public.
+      #
+      # What it would ADD by holding the key is a real-money credential sitting on a
+      # publicly reachable box, behind nothing but a session cookie and a password. The
+      # research value is identical either way, so the key stays on the machine you
+      # physically control and place orders from.
+      #
+      # If you later decide otherwise, add KALSHI_KEY_ID and KALSHI_PRIVATE_KEY as
+      # dashboard secrets and flip LIVE_TRADING_ENABLED — but do it as a decision, and
+      # give that account a password you do not use anywhere else.
       - key: LIVE_TRADING_ENABLED
         value: "false"
-      - key: LIVE_TRADING_USER
-        sync: false              # set to your login username to enable live orders
-      - key: HARD_MAX_STAKE
-        value: "25"
-      - key: HARD_DAILY_CAP
-        value: "100"
-      - key: KALSHI_KEY_ID
-        sync: false              # paste in the dashboard; stays out of the repo
-      - key: KALSHI_PRIVATE_KEY
-        sync: false
 
       # ---- optional sportsbook cross-check ----
       - key: ODDS_API_KEY
