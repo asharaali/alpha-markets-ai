@@ -9,7 +9,7 @@
  * dependency, works offline, and inherits the theme through CSS variables.
  */
 
-import { el, pct, num } from "./core.js?v=2.1.0";
+import { el, pct, num } from "./core.js?v=2.1.4";
 
 const NS = "http://www.w3.org/2000/svg";
 

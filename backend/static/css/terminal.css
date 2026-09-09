@@ -453,3 +453,15 @@ hr.rule { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
   .content { padding: 14px; }
   .cards { grid-template-columns: 1fr; }
 }
+
+/* Order ticket — appears inside a prediction card when you click Trade. */
+.ticket { border-top: 1px solid var(--border); margin-top: 4px; }
+.ticket .controls { align-items: flex-end; }
+.ticket .seg button.active { background: var(--accent-bg); color: var(--accent); }
+/* Live mode has to be unmistakable. A misread toggle here spends real money.
+   Keyed off an explicit class, not :last-child — when the LIVE button is absent (because
+   this account cannot trade live) the Paper button became the last child and inherited
+   the red real-money styling, which says the opposite of the truth. */
+.ticket .seg button.live-mode.active {
+  background: var(--neg-bg); color: var(--neg); border-color: var(--neg); font-weight: 600;
+}

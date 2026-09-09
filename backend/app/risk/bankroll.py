@@ -169,12 +169,40 @@ def size_bet(signal: Signal, risk: RiskSettings, exposure: Exposure) -> Dict[str
     if stake <= 0:
         warnings.append("Exposure limits leave no room for this bet right now.")
 
+    # Contracts are indivisible, and on a small bankroll that matters more than the
+    # arithmetic suggests. A quarter-Kelly stake of $0.27 against a 30c contract floors to
+    # zero contracts and reads as "do not bet", when in fact ONE contract is within a
+    # rounding error of the right size. Report the exact figure, the tradeable figure, and
+    # how far apart they are, rather than silently truncating to nothing.
+    exact_contracts = (stake / float(cost)) if cost else 0.0
+    tradeable = int(exact_contracts)
+    rounding_note = None
+    if tradeable == 0 and exact_contracts > 0:
+        if exact_contracts >= 0.5:
+            tradeable = 1
+            overshoot = (float(cost) / stake) if stake > 0 else float("inf")
+            rounding_note = (
+                f"One contract costs ${float(cost):.2f}, which is {overshoot:.1f}x the "
+                f"${stake:.2f} this edge justifies at your bankroll. A single contract is "
+                "the smallest bet available and is close enough to correct; anything more "
+                "is over-betting the edge.")
+        else:
+            rounding_note = (
+                f"This edge justifies ${stake:.2f}, and one contract costs "
+                f"${float(cost):.2f} — more than twice the right size. The disciplined "
+                "answer at this bankroll is to skip it.")
+            warnings.append("Smallest tradeable size is more than twice the stake this "
+                            "edge justifies.")
+
     return {
         "stake": round(max(stake, 0.0), 2),
         "uncapped_stake": round(raw, 2),
         "full_kelly_pct": round(full_kelly * 100, 2),
         "recommended_pct_of_bankroll": round((stake / bankroll) * 100, 2) if bankroll else 0.0,
-        "contracts": int(stake / float(cost)) if cost else 0,
+        "exact_contracts": round(exact_contracts, 3),
+        "contracts": tradeable,
+        "tradeable_cost": round(tradeable * float(cost), 2) if cost else 0.0,
+        "rounding_note": rounding_note,
         "basis": basis,
         "capped_by": capped_by,
         "caps": [{"name": n, "limit": round(v, 2)} for n, v in caps],

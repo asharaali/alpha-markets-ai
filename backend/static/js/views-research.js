@@ -3,10 +3,10 @@
 import {
   api, el, frag, panel, stat, statRow, badge, table, loading, emptyState, errorState,
   notice, probRow, disclosure, confidenceBadge, pct, signedPct, num, signed, money,
-  cents, kickoffLabel, relativeTime, evClass, get,
-} from "./core.js?v=2.1.0";
-import { equityChart, distributionChart, movementChart, splitBar, rankBars } from "./charts.js?v=2.1.0";
-import { parlayCard } from "./views-portfolio.js?v=2.1.0";
+  cents, kickoffLabel, relativeTime, evClass, get, setChildren,
+} from "./core.js?v=2.1.4";
+import { equityChart, distributionChart, movementChart, splitBar, rankBars } from "./charts.js?v=2.1.4";
+import { parlayCard } from "./views-portfolio.js?v=2.1.4";
 
 const teamAbbr = (g, side) => g?.[side] ?? "?";
 
@@ -131,6 +131,30 @@ function portfolioSummary() {
           : errorState(err));
     });
   return holder;
+}
+
+/** The dashboard's ranked-edge table.
+ *
+ * This function was referenced from the dashboard for a long time without existing: the
+ * call sits behind `if (opps.opportunities.length)`, and until the sportsbook consensus
+ * started finding edges that branch never ran. The app beginning to work is what exposed
+ * it, which is a good argument for smoke-testing against live data rather than fixtures.
+ */
+function opportunityTable(rows, navigate) {
+  return table([
+    { label: "Market", render: (o) => el("div", {},
+        el("div", { text: o.label }),
+        el("div", { class: "mono-sm", text: `${o.game_id} · ${o.market_type.replace(/_/g, " ")}` })) },
+    { label: "Fair", num: true, render: (o) => pct(o.features?.fair_prob ?? o.model_prob) },
+    { label: "Kalshi", num: true, render: (o) => pct(o.market_prob) },
+    { label: "EV", num: true, cls: (o) => evClass(o.ev_per_dollar),
+      render: (o) => signedPct(o.ev_per_dollar) },
+    { label: "Conf", render: (o) => confidenceBadge(o.confidence) },
+    { label: "Depth", num: true, render: (o) => money(o.features?.depth_usd) },
+    { label: "Size", num: true, render: (o) => (o.sizing
+        ? `${o.sizing.contracts}x = ${money(o.sizing.tradeable_cost)}`
+        : "—") },
+  ], rows, { onRowClick: (o) => navigate(`#/game/${o.game_id}`) });
 }
 
 /* ---------------------------------------------------------------------- slate */
@@ -643,34 +667,165 @@ export function predictionCard(signal, navigate) {
       el("span", { class: "mono-sm", text: q.ticker || "" }),
       el("div", { class: "spacer" }),
       signal.confidence !== "reference" && q.ticker
-        ? el("button", { class: "btn sm primary", text: "Paper trade",
-            onClick: (e) => placeFromCard(e.currentTarget, signal) })
+        ? el("button", { class: "btn sm primary", text: "Trade",
+            onClick: (e) => openTicket(e.currentTarget, signal) })
         : null),
   );
 }
 
-async function placeFromCard(button, signal) {
-  const original = button.textContent;
-  button.disabled = true;
-  button.textContent = "Placing…";
+/* ------------------------------------------------------------------- order ticket */
+
+/** Whether the OPEN ticket is armed for real money.
+ *
+ * Reset every time a ticket opens, and that reset is load-bearing. This started as a
+ * module-level flag that survived between tickets while each new ticket rendered with
+ * "Paper" highlighted — so arming live on one card and then opening another showed Paper
+ * and would have placed a real order anyway. A mode indicator that can disagree with the
+ * mode is worse than having no indicator. */
+let LIVE_ARMED = false;
+
+async function openTicket(button, signal) {
+  const card = button.closest(".card");
+  if (card.querySelector(".ticket")) { card.querySelector(".ticket").remove(); return; }
+  // Every ticket opens on paper, matching the toggle it is about to render.
+  LIVE_ARMED = false;
+
+  const f = signal.features || {};
+  const cost = f.cost;
+  const ticket = el("div", { class: "ticket" }, loading(2));
+  card.append(ticket);
+
+  let me = null, sizing = null;
   try {
-    const result = await api("/api/orders", {
-      method: "POST",
-      body: {
-        ticker: signal.quote.ticker, side: "yes", stake: 10, mode: "paper",
-        game_id: signal.game_id, label: signal.label,
-        market_type: signal.market_type,
-        model_prob: signal.features?.fair_prob ?? signal.model_prob,
-      },
-    });
-    button.textContent = result.ok ? `✓ ${result.contracts} @ ${Math.round(result.price * 100)}¢` : "Failed";
-    button.classList.remove("primary");
-    if (!result.ok) button.title = result.message;
+    me = await api("/api/me");
+    const opps = await api("/api/opportunities?limit=60");
+    const match = (opps.opportunities || []).find(
+      (o) => o.quote && o.quote.ticker === signal.quote.ticker);
+    sizing = match?.sizing || null;
   } catch (err) {
-    button.textContent = err.status === 401 ? "Sign in first" : "Failed";
-    button.title = err.message;
-    setTimeout(() => { button.textContent = original; button.disabled = false; }, 2500);
+    ticket.replaceChildren(errorState(err));
+    return;
   }
+
+  if (!me.user) {
+    ticket.replaceChildren(notice("Sign in to place orders — paper or live."));
+    return;
+  }
+
+  const liveAllowed = !!me.live_trading?.allowed;
+  const suggested = sizing?.tradeable_cost || (cost ? Number(cost).toFixed(2) : "1.00");
+  const stakeInput = el("input", { type: "number", step: "0.01", min: "0.01",
+                                   value: suggested, style: "width:92px" });
+  const status = el("div", { class: "mono-sm", style: "margin-top:8px" });
+
+  const modeToggle = el("div", { class: "seg" },
+    el("button", { class: "active", text: "Paper",
+      onClick: (e) => setMode(e, false) }),
+    liveAllowed
+      ? el("button", { class: "live-mode", text: "LIVE",
+                       onClick: (e) => setMode(e, true) })
+      : null);
+
+  function setMode(e, live) {
+    LIVE_ARMED = live;
+    for (const b of e.currentTarget.parentElement.children) b.classList.remove("active");
+    e.currentTarget.classList.add("active");
+    renderStatus();
+  }
+
+  function renderStatus() {
+    const stake = parseFloat(stakeInput.value) || 0;
+    const contracts = cost ? Math.floor(stake / cost) : 0;
+    const parts = [];
+    if (contracts < 1) {
+      parts.push(`$${stake.toFixed(2)} does not cover one contract at ${cents(cost)}.`);
+    } else {
+      parts.push(`${contracts} contract${contracts === 1 ? "" : "s"} at ${cents(cost)} `
+               + `= $${(contracts * cost).toFixed(2)}. `
+               + `Pays $${contracts.toFixed(2)} if it lands.`);
+    }
+    if (sizing && sizing.stake > 0 && stake > sizing.stake * 2.5) {
+      parts.push(`⚠ This edge justifies about $${sizing.stake.toFixed(2)} at your bankroll. `
+               + `You are betting ${(stake / sizing.stake).toFixed(1)}x that.`);
+    }
+    status.replaceChildren(el("span", { text: parts.join(" ") }));
+    status.className = "mono-sm" + (LIVE_ARMED ? " warnc" : "");
+  }
+  stakeInput.addEventListener("input", renderStatus);
+
+  const submit = el("button", { class: "btn sm primary", text: "Place order",
+    onClick: () => place() });
+
+  async function place() {
+    const stake = parseFloat(stakeInput.value) || 0;
+    // Read the mode off the button that is actually highlighted, so what is submitted can
+    // never disagree with what the interface is showing.
+    const liveButton = modeToggle.querySelector(".live-mode");
+    const live = !!(liveButton && liveButton.classList.contains("active"));
+    if (live !== LIVE_ARMED) {
+      console.warn("mode flag disagreed with the toggle; using the toggle", live, LIVE_ARMED);
+    }
+    // A real-money order gets an explicit confirmation naming the amount. A paper one
+    // does not need it, and asking every time would train the habit of clicking through.
+    if (live) {
+      const contracts = cost ? Math.floor(stake / cost) : 0;
+      const ok = window.confirm(
+        `REAL MONEY ORDER\n\n${signal.label}\n`
+        + `${contracts} contracts at ${Math.round(cost * 100)}c = $${(contracts * cost).toFixed(2)}\n\n`
+        + `This spends real funds on Kalshi and cannot be undone. Continue?`);
+      if (!ok) return;
+    }
+    submit.disabled = true;
+    submit.textContent = live ? "Sending to Kalshi…" : "Recording…";
+    try {
+      const result = await api("/api/orders", {
+        method: "POST",
+        body: {
+          ticker: signal.quote.ticker, side: "yes", stake,
+          mode: live ? "live" : "paper",
+          game_id: signal.game_id, label: signal.label,
+          market_type: signal.market_type,
+          model_prob: f.fair_prob ?? signal.model_prob,
+        },
+      });
+      setChildren(ticket,
+        notice(result.message, result.ok ? "" : "bad"),
+        result.ok
+          ? el("div", { class: "mono-sm" },
+              `mode: ${result.mode}`
+              + (result.order_id ? ` · kalshi order ${result.order_id}` : ""))
+          : null,
+        el("div", { style: "margin-top:8px" },
+          el("a", { href: "#/portfolio", text: "View in portfolio →" })));
+    } catch (err) {
+      submit.disabled = false;
+      submit.textContent = "Place order";
+      status.replaceChildren(el("span", { class: "neg", text: err.message }));
+    }
+  }
+
+  setChildren(ticket,
+    el("hr", { class: "rule" }),
+    el("div", { class: "controls", style: "margin-bottom:6px" },
+      el("label", { class: "field" }, "Stake ($)", stakeInput),
+      el("label", { class: "field" }, "Mode", modeToggle),
+      submit),
+    sizing
+      ? el("div", { class: "mono-sm dim" },
+          `Model suggests $${sizing.stake.toFixed(2)} `
+        + `(${sizing.basis})`
+        + (sizing.contracts ? ` → ${sizing.contracts} contract, $${sizing.tradeable_cost.toFixed(2)}` : ""))
+      : null,
+    sizing?.rounding_note
+      ? el("div", { class: "mono-sm dim", style: "margin-top:4px", text: sizing.rounding_note })
+      : null,
+    status,
+    liveAllowed
+      ? null
+      : el("div", { class: "mono-sm dim", style: "margin-top:6px",
+                    text: `Live orders unavailable: ${me.live_trading?.reason || "not enabled"}` }),
+  );
+  renderStatus();
 }
 
 /* -------------------------------------------------------------------- markets */

@@ -119,6 +119,18 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/** replaceChildren, but null-safe.
+ *
+ * The DOM's own replaceChildren coerces null to the string "null" and inserts it as a text
+ * node, so a conditional child written as `cond ? el(...) : null` renders the word "null"
+ * on screen. Our el() helper already skips nulls; this makes the container call behave the
+ * same way. */
+export function setChildren(node, ...children) {
+  node.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined
+                                                       && c !== false));
+  return node;
+}
+
 export const frag = (...children) => {
   const f = document.createDocumentFragment();
   for (const c of children.flat()) if (c) f.append(c);

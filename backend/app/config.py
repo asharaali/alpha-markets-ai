@@ -42,7 +42,7 @@ class Settings:
     # ---------------- app ----------------
     APP_NAME = "Alpha Markets"
     APP_TAGLINE = "NFL quantitative market research"
-    VERSION = "2.1.0"
+    VERSION = "2.1.4"
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     # Where the SQLite database, cached feeds, and user accounts live. Uses the Render
