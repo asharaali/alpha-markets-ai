@@ -4,9 +4,9 @@ import {
   api, el, frag, panel, stat, statRow, badge, table, loading, emptyState, errorState,
   notice, probRow, disclosure, confidenceBadge, pct, signedPct, num, signed, money,
   cents, kickoffLabel, relativeTime, evClass, get,
-} from "./core.js?v=2.0.7";
-import { equityChart, distributionChart, movementChart, splitBar, rankBars } from "./charts.js?v=2.0.7";
-import { parlayCard } from "./views-portfolio.js?v=2.0.7";
+} from "./core.js?v=2.1.0";
+import { equityChart, distributionChart, movementChart, splitBar, rankBars } from "./charts.js?v=2.1.0";
+import { parlayCard } from "./views-portfolio.js?v=2.1.0";
 
 const teamAbbr = (g, side) => g?.[side] ?? "?";
 
@@ -296,6 +296,8 @@ export async function gameDetail(mount, { navigate, params }) {
           ], g.mispricing.violations))
       : null,
 
+    bookConsensusPanel(g),
+
     lineMovementPanel(g),
 
     playerPropsPanel(params.gameId),
@@ -376,6 +378,42 @@ function playerPropsPanel(gameId) {
   }
 
   return panel("Player props", { sub: "loaded on request" }, body);
+}
+
+
+function bookConsensusPanel(g) {
+  const c = g.book_consensus;
+  if (!c) {
+    return panel("Sportsbook consensus", { sub: "cross-check on Kalshi" },
+      emptyState("No sportsbook consensus for this game",
+        "Either the odds feed is unavailable or too few books post this matchup."));
+  }
+  const proj = g.projection;
+  const rows = [
+    { what: "Expected margin", books: signed(c.margin, 1), model: signed(proj.expected_margin, 1) },
+    { what: "Expected total", books: num(c.total, 1), model: num(proj.expected_total, 1) },
+    { what: `${g.teams.home.name} win`, books: pct(c.home_win_prob),
+      model: pct(proj.win_probability.home) },
+  ];
+  return panel("Sportsbook consensus", {
+    sub: `${c.book_count} books · they agree within ${num(c.book_disagreement, 1)} pts` },
+    notice("This is the strongest evidence on the page, because it does not depend on our "
+         + "model being right. It compares Kalshi's price against "
+         + `<strong>${c.book_count}</strong> deep sportsbooks. Where a thin exchange contract `
+         + "is priced away from that consensus, the exchange is usually the one that is wrong."),
+    table([
+      { label: "", key: "what" },
+      { label: `Sportsbooks (${c.book_count})`, num: true, key: "books" },
+      { label: "Our model", num: true, key: "model" },
+      { label: "Gap", num: true, render: (r) => {
+          const b = parseFloat(String(r.books).replace("%", ""));
+          const m = parseFloat(String(r.model).replace("%", ""));
+          if (Number.isNaN(b) || Number.isNaN(m)) return "—";
+          return signed(m - b, 1);
+        } },
+    ], rows),
+    el("div", { class: "prose", style: "margin-top:10px" },
+      `Books quoting: ${(c.books || []).join(", ")}.`));
 }
 
 

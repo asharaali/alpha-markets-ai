@@ -11,6 +11,7 @@ from app import auth, engine
 from app.api import schemas
 from app.api.deps import clear_session, current_user, set_session
 from app.config import live_trading_available, settings
+from app.data import odds_api
 from app.data.kalshi import client as kalshi_client
 from app.jobs import scheduler
 from app.models import calibration
@@ -101,14 +102,13 @@ async def health() -> Dict[str, Any]:
             # Reported as NOT WIRED rather than "configured". A key being present in the
             # environment is not the same as a data source being used, and a health
             # endpoint that conflates the two is worse than one that omits the row.
-            "odds_api": {"configured": False,
-                         "key_present": bool(settings.ODDS_API_KEY),
+            "odds_api": {**odds_api.quota(),
                          "requires_key": True,
-                         "note": ("A key is set but nothing reads it — the sportsbook "
-                                  "cross-check is not implemented yet. Setting this "
-                                  "changes nothing today."
-                                  if settings.ODDS_API_KEY else
-                                  "Not implemented yet.")},
+                         "note": ("Sportsbook consensus across US books, used to check "
+                                  "Kalshi's price against the wider market."
+                                  if odds_api.configured() else
+                                  "Optional. Without it, the book-consensus strategy is "
+                                  "skipped and only model-vs-Kalshi comparisons run.")},
         },
         "database": counts,
         "jobs": scheduler.status(),

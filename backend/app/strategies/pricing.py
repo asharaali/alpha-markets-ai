@@ -202,8 +202,53 @@ def price_signal(signal: Signal, quote: MarketQuote, *,
         "depth_usd": quote.depth_usd,
         "spread_width": round(quote.spread_width, 4) if quote.spread_width else None,
         "liquid": liquid,
+        "blended_here": True,
         "value": is_value(edge=signal.edge, ev=signal.ev_per_dollar,
                           market_prob=mprob, liquid=liquid),
+    })
+    return signal
+
+
+def attach_quote(signal: Signal, quote: MarketQuote, fair: float, *,
+                 vigfree: Optional[Dict[str, float]] = None,
+                 min_ev: Optional[float] = None) -> Signal:
+    """Attach a live quote and price a probability that is ALREADY final.
+
+    The distinction from price_signal matters enormously. price_signal takes a raw model
+    output and blends it toward the market. This takes a probability that has already been
+    through that step and simply computes edge and expected value against the price.
+
+    Using price_signal where this belongs shrinks an already-shrunk number a second time.
+    That is not a rounding difference: an ensemble combining three contributors that each
+    sat 3 points off the market was landing 0.3 points off it, which silently suppressed
+    every edge the application could find.
+    """
+    mprob = market_probability(quote, vigfree)
+    signal.quote = quote
+    if mprob is None:
+        signal.market_prob = None
+        signal.edge = None
+        signal.ev_per_dollar = None
+        return signal
+
+    fair = min(max(fair, 1e-4), 1.0 - 1e-4)
+    cost = quote.cost
+    liquid = _liquid(quote)
+
+    signal.market_prob = mprob
+    signal.edge = fair - mprob
+    signal.ev_per_dollar = expected_value(fair, cost) if cost else None
+    signal.features.update({
+        "fair_prob": round(fair, 4),
+        "cost": round(cost, 4) if cost else None,
+        "decimal_odds": round(decimal_odds(cost), 3) if cost else None,
+        "american_odds": american_odds(cost) if cost else None,
+        "depth_usd": quote.depth_usd,
+        "spread_width": round(quote.spread_width, 4) if quote.spread_width else None,
+        "liquid": liquid,
+        "blended_here": False,
+        "value": is_value(edge=signal.edge, ev=signal.ev_per_dollar,
+                          market_prob=mprob, liquid=liquid, min_ev=min_ev),
     })
     return signal
 

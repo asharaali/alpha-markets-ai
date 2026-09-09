@@ -35,6 +35,11 @@ log = get_logger(__name__)
 # Prior weight per strategy before any track record exists. The core game model carries
 # most of the weight; the matchup view tilts; movement corroborates but does not predict.
 PRIOR_WEIGHTS: Dict[str, float] = {
+    # The highest prior in the table, and deliberately so: this is the only strategy whose
+    # signal does not depend on our own projection being any good. It compares a thin
+    # exchange price against eleven deep sportsbooks. The backtest says our model has not
+    # beaten a closing line; it says nothing against the closing line itself.
+    "book_consensus": 1.6,
     "moneyline": 1.0,
     "spread": 1.0,
     "totals": 1.0,
@@ -186,10 +191,11 @@ def _blend(members: List[Signal], multipliers: Dict[str, float]) -> Optional[Sig
         reasoning=reasoning,
     )
     if quote is not None:
-        sample_confidence = max(
-            (s.features.get("model_weight", 0.3) for s in members), default=0.3)
-        pricing.price_signal(ensemble, quote,
-                             sample_confidence=min(sample_confidence * 2.4, 1.0))
+        # attach_quote, NOT price_signal: every contributor has already been blended toward
+        # the market by its own strategy, so blending the combination again would shrink an
+        # already-shrunk number a second time and erase the disagreement the ensemble
+        # exists to express.
+        pricing.attach_quote(ensemble, quote, combined)
     ensemble.features.update({
         "contributors": [
             {"strategy": s.strategy,

@@ -1,9 +1,9 @@
 /* Application shell: routing, session, and the persistent chrome. */
 
-import { api, el, relativeTime, pct } from "./core.js?v=2.0.7";
-import { dashboard, games, gameDetail, predictions, markets } from "./views-research.js?v=2.0.7";
-import { strategies, modelLab, performance, backtests } from "./views-model.js?v=2.0.7";
-import { parlays, portfolio, settings, applyTheme } from "./views-portfolio.js?v=2.0.7";
+import { api, el, relativeTime, pct } from "./core.js?v=2.1.0";
+import { dashboard, games, gameDetail, predictions, markets } from "./views-research.js?v=2.1.0";
+import { strategies, modelLab, performance, backtests } from "./views-model.js?v=2.1.0";
+import { parlays, portfolio, settings, applyTheme } from "./views-portfolio.js?v=2.1.0";
 
 const ROUTES = [
   { path: "#/", title: "Dashboard", group: "Overview", view: dashboard, nav: true },

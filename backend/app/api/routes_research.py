@@ -11,14 +11,15 @@ from app.core.types import Confidence, MarketType
 from app.data import teams
 from app.data.kalshi import series as kalshi_series
 from app.models import calibration, ratings as ratings_model
-from app.strategies import (ensemble, game_lines, injury_impact, line_movement,
-                            matchup, mispricing, props, situational)
+from app.strategies import (book_consensus, ensemble, game_lines, injury_impact,
+                            line_movement, matchup, mispricing, props, situational)
 from app.tracking import store
 
 router = APIRouter()
 
 # Every strategy's self-description, so the UI never invents methodology text.
 STRATEGY_META = [
+    book_consensus.META,
     game_lines.MONEYLINE_META, game_lines.SPREAD_META, game_lines.TOTAL_META,
     game_lines.WIN_MARGIN_META, matchup.META, injury_impact.META, situational.META,
     line_movement.META, mispricing.META, props.META,
@@ -55,6 +56,7 @@ async def slate(week: Optional[int] = None, season: Optional[int] = None):
         "built_at": analysis.built_at,
         "games": [_slate_row(analysis, g.game_id) for g in analysis.games],
         "board": analysis.board_stats,
+        "book_consensus": analysis.book_consensus,
         "ratings": {
             "seasons_used": analysis.ratings.seasons_used,
             "effective_games_per_team": analysis.ratings.effective_games_per_team,
@@ -101,6 +103,7 @@ async def game_detail(game_id: str, include_props: bool = Query(default=True)):
         "signals": [s.to_dict() for s in signals],
         "ensemble": [s.to_dict() for s in ensembled],
         "opportunities": [s.to_dict() for s in ensembled if s.features.get("value")],
+        "book_consensus": analysis.book_consensus.get(game_id),
         "mispricing": mispricing.summarise(ctx),
         "line_movement": [
             m for m in (line_movement.movement_for(q.ticker, q.mid) for q in ctx.quotes)

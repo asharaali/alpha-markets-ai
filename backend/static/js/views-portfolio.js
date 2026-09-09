@@ -3,8 +3,8 @@
 import {
   api, el, frag, panel, stat, statRow, badge, table, loading, emptyState, errorState,
   notice, disclosure, pct, signedPct, num, money, cents, evClass, get, relativeTime,
-} from "./core.js?v=2.0.7";
-import { equityChart } from "./charts.js?v=2.0.7";
+} from "./core.js?v=2.1.0";
+import { equityChart } from "./charts.js?v=2.1.0";
 
 /* -------------------------------------------------------------------- parlays */
 

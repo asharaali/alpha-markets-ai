@@ -24,14 +24,14 @@ from app.core.cache import AsyncTTLCache
 from app.core.errors import InsufficientData, NotFound
 from app.core.logging import get_logger
 from app.core.types import Confidence, Game, MarketQuote, MarketType, Signal
-from app.data import nflverse, teams, weather
+from app.data import nflverse, odds_api, teams, weather
 from app.data.kalshi import markets as kalshi_markets
 from app.data.kalshi import series as kalshi_series
 from app.features import players as player_features
 from app.models import calibration, game_model
 from app.models.ratings import RatingSet, build as build_ratings
-from app.strategies import (ensemble, game_lines, injury_impact, line_movement,
-                            matchup, mispricing, props, situational)
+from app.strategies import (book_consensus, ensemble, game_lines, injury_impact,
+                            line_movement, matchup, mispricing, props, situational)
 from app.strategies.base import GameContext, ProjectionAdjustment
 
 log = get_logger(__name__)
@@ -60,6 +60,7 @@ class SlateAnalysis:
     model_summary: Dict[str, Any]
     built_at: float = field(default_factory=time.time)
     warnings: List[str] = field(default_factory=list)
+    book_consensus: Dict[str, Any] = field(default_factory=dict)
 
     def all_ensemble(self) -> List[Signal]:
         return [s for rows in self.ensemble.values() for s in rows]
@@ -173,7 +174,8 @@ def projection_centres(contexts: Dict[str, GameContext]) -> Dict[str, Dict[str, 
 
 def run_strategies(ctx: GameContext, artifact: calibration.GameModelArtifact,
                    name_index: Dict[str, player_features.PlayerForm],
-                   *, include_props: bool = True) -> List[Signal]:
+                   *, include_props: bool = True,
+                   consensus: Optional[Any] = None) -> List[Signal]:
     """Every market strategy's view of one game."""
     out: List[Signal] = []
     out.extend(game_lines.moneyline_signals(ctx))
@@ -182,6 +184,8 @@ def run_strategies(ctx: GameContext, artifact: calibration.GameModelArtifact,
     out.extend(game_lines.win_margin_signals(ctx))
     out.extend(matchup.signals(ctx, artifact))
     out.extend(line_movement.signals(ctx))
+    if consensus is not None:
+        out.extend(book_consensus.signals(ctx, consensus, artifact.margin_profile()))
     if include_props:
         out.extend(props.signals(ctx, name_index))
     return out
@@ -222,6 +226,9 @@ async def analyze(*, season: Optional[int] = None, week: Optional[int] = None,
         depth_chart.setdefault(str(row["team"]), []).append(row)
 
     forecasts = await weather.for_games(slate)
+    # Sportsbook consensus is an enhancement: consensus() never raises, and an empty result
+    # simply means the cross-check does not run this cycle.
+    consensus = await odds_api.consensus(slate)
 
     # Step 1: project every game before touching the venue.
     contexts: Dict[str, GameContext] = {}
@@ -265,7 +272,8 @@ async def analyze(*, season: Optional[int] = None, week: Optional[int] = None,
     for game in slate:
         ctx = contexts[game.game_id]
         ctx.quotes = by_game.get(game.game_id, [])
-        rows = run_strategies(ctx, artifact, name_index, include_props=include_props)
+        rows = run_strategies(ctx, artifact, name_index, include_props=include_props,
+                              consensus=consensus.get(game.game_id))
         signals[game.game_id] = rows
         ensembles[game.game_id] = ensemble.combine(rows, multipliers=multipliers)
 
@@ -273,6 +281,7 @@ async def analyze(*, season: Optional[int] = None, week: Optional[int] = None,
         season=season, week=week, games=slate, contexts=contexts, signals=signals,
         ensemble=ensembles, quotes=quotes, board_stats=board_stats, ratings=ratings,
         model_summary=artifact.summary(), warnings=warnings,
+        book_consensus={gid: row.to_dict() for gid, row in consensus.items()},
     )
 
 
