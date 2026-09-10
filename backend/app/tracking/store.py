@@ -20,7 +20,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from app.config import settings
 from app.core.logging import get_logger
@@ -179,13 +179,80 @@ def transaction() -> Iterator[sqlite3.Connection]:
 _initialised = False
 
 
+# Additive column migrations, applied in order and idempotently. Every existing row keeps
+# its data: SQLite fills new columns with NULL and the readers below treat NULL as "this
+# position predates the column", never as zero. Nothing here drops or rewrites a column,
+# because the performance page's credibility rests on stored predictions being immutable.
+MIGRATIONS: List[Tuple[str, str, str]] = [
+    # (table, column, DDL type) — settlement metadata the resolver needs.
+    ("positions", "team", "TEXT"),
+    ("positions", "line", "REAL"),
+    ("positions", "selection", "TEXT"),
+    # Order lifecycle and venue reconciliation.
+    ("positions", "client_order_id", "TEXT"),
+    ("positions", "venue_order_id", "TEXT"),
+    ("positions", "requested_contracts", "INTEGER"),
+    ("positions", "filled_contracts", "INTEGER"),
+    ("positions", "remaining_contracts", "INTEGER"),
+    ("positions", "avg_fill_price", "REAL"),
+    ("positions", "entry_fees", "REAL"),
+    ("positions", "exit_fees", "REAL"),
+    ("positions", "closed_contracts", "INTEGER"),
+    ("positions", "last_reconciled_at", "REAL"),
+    # Provenance: which model said what, and when.
+    ("positions", "model_version", "TEXT"),
+    ("positions", "predicted_at", "REAL"),
+    ("positions", "recommendation_id", "TEXT"),
+    ("positions", "max_entry_price", "REAL"),
+    ("positions", "settled_at", "REAL"),
+    # Predictions gain a stable per-game forecast cluster so repeated hourly refreshes of
+    # the same view can be collapsed when scoring.
+    ("predictions", "forecast_key", "TEXT"),
+    ("predictions", "kickoff_ts", "REAL"),
+    ("predictions", "horizon_hours", "REAL"),
+    ("predictions", "model_version", "TEXT"),
+    ("predictions", "closing_at", "REAL"),
+    # Parlays record which product was actually bought.
+    ("parlays", "product", "TEXT"),
+    ("parlays", "executable", "INTEGER"),
+    ("parlays", "pricing_basis", "TEXT"),
+    ("parlays", "max_payout", "REAL"),
+    ("parlays", "total_fees", "REAL"),
+    ("parlays", "standard_error", "REAL"),
+]
+
+
+def _existing_columns(conn: sqlite3.Connection, table: str) -> set:
+    try:
+        return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except sqlite3.Error:
+        return set()
+
+
+def _migrate(conn: sqlite3.Connection) -> int:
+    applied = 0
+    by_table: Dict[str, set] = {}
+    for table, column, ddl in MIGRATIONS:
+        if table not in by_table:
+            by_table[table] = _existing_columns(conn, table)
+        if not by_table[table] or column in by_table[table]:
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        by_table[table].add(column)
+        applied += 1
+    return applied
+
+
 def init() -> None:
     global _initialised
     if _initialised:
         return
     with transaction() as conn:
         conn.executescript(SCHEMA)
+        applied = _migrate(conn)
     _initialised = True
+    if applied:
+        log.info("applied %d column migration(s)", applied)
     log.info("database ready at %s", settings.DB_PATH)
 
 
@@ -378,20 +445,106 @@ def open_position(**kwargs: Any) -> str:
     return position_id
 
 
-def close_position(position_id: str, *, exit_price: float, note: str = "") -> Optional[Dict[str, Any]]:
+def _open_contracts(row: Any) -> int:
+    """How many contracts are still held: filled minus already closed."""
+    filled = row["filled_contracts"] if row["filled_contracts"] is not None else row["contracts"]
+    closed = row["closed_contracts"] or 0
+    return max(0, int(filled) - int(closed))
+
+
+def close_position(position_id: str, *, exit_price: float, note: str = "",
+                   contracts: Optional[int] = None,
+                   exit_fee: float = 0.0) -> Optional[Dict[str, Any]]:
+    """Sell some or all of a position at `exit_price`, net of fees.
+
+    Partial closes are first-class. `contracts=None` means "everything still open"; a
+    smaller number leaves the remainder held and marks the row `partially_closed`, so the
+    residual keeps its entry price and continues to appear in exposure. The old version
+    always closed the whole row, which silently destroyed the remainder.
+
+    P&L is computed from the price actually traded and the fees actually paid, on both
+    legs. Fees are never netted out of the entry price, because the entry price has to
+    keep matching the fill it came from.
+    """
     init()
     with transaction() as conn:
-        row = conn.execute("SELECT * FROM positions WHERE id=? AND status='open'",
-                           (position_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM positions WHERE id=? AND status IN "
+            "('open','partially_closed','filled','partially_filled')",
+            (position_id,)).fetchone()
         if row is None:
             return None
-        pnl = (exit_price - row["entry_price"]) * row["contracts"]
+
+        available = _open_contracts(row)
+        if available <= 0:
+            return None
+        qty = available if contracts is None else max(0, min(int(contracts), available))
+        if qty <= 0:
+            return None
+
+        entry = float(row["entry_price"])
+        realised = (exit_price - entry) * qty - float(exit_fee or 0.0)
+        # The entry fee is charged once, at open, so it is attributed to the first close
+        # in proportion to the share of the position being retired.
+        entry_fee_total = float(row["entry_fees"] or 0.0)
+        filled = row["filled_contracts"] if row["filled_contracts"] is not None else row["contracts"]
+        entry_fee_share = entry_fee_total * (qty / filled) if filled else 0.0
+        realised -= entry_fee_share
+
+        already_closed = int(row["closed_contracts"] or 0)
+        now_closed = already_closed + qty
+        remaining = int(filled) - now_closed
+        status = "closed" if remaining <= 0 else "partially_closed"
+        pnl = float(row["pnl"] or 0.0) + realised
+
         conn.execute(
-            "UPDATE positions SET status='closed', closed_at=?, exit_price=?, pnl=?, "
-            "note=? WHERE id=?",
-            (time.time(), exit_price, pnl, note or row["note"], position_id))
+            "UPDATE positions SET status=?, closed_at=?, exit_price=?, pnl=?, note=?, "
+            "closed_contracts=?, exit_fees=? WHERE id=?",
+            (status, time.time(), exit_price, pnl, note or row["note"], now_closed,
+             float(row["exit_fees"] or 0.0) + float(exit_fee or 0.0), position_id))
+
         updated = dict(row)
-        updated.update({"status": "closed", "exit_price": exit_price, "pnl": pnl})
+        updated.update({"status": status, "exit_price": exit_price, "pnl": pnl,
+                        "closed_contracts": now_closed, "remaining_open": remaining,
+                        "realised_this_close": realised, "contracts_closed": qty})
+        return updated
+
+
+def settle_position(position_id: str, *, won: bool, note: str = "") -> Optional[Dict[str, Any]]:
+    """Settle a position at expiry: $1 per winning contract, $0 per loser.
+
+    Kalshi charges no fee at settlement, so only the entry fee reduces the result. Marked
+    `settled` rather than `closed` so the interface can tell "the game finished" apart
+    from "I sold out early", which are different events with different lessons.
+    """
+    init()
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT * FROM positions WHERE id=? AND status IN "
+            "('open','partially_closed','filled','partially_filled')",
+            (position_id,)).fetchone()
+        if row is None:
+            return None
+        qty = _open_contracts(row)
+        if qty <= 0:
+            return None
+
+        entry = float(row["entry_price"])
+        value = 1.0 if won else 0.0
+        filled = row["filled_contracts"] if row["filled_contracts"] is not None else row["contracts"]
+        entry_fee_total = float(row["entry_fees"] or 0.0)
+        entry_fee_share = entry_fee_total * (qty / filled) if filled else 0.0
+        realised = (value - entry) * qty - entry_fee_share
+        pnl = float(row["pnl"] or 0.0) + realised
+
+        conn.execute(
+            "UPDATE positions SET status='settled', closed_at=?, settled_at=?, "
+            "exit_price=?, pnl=?, note=?, closed_contracts=? WHERE id=?",
+            (time.time(), time.time(), value, pnl, note or row["note"], int(filled),
+             position_id))
+        updated = dict(row)
+        updated.update({"status": "settled", "exit_price": value, "pnl": pnl,
+                        "contracts_settled": qty})
         return updated
 
 

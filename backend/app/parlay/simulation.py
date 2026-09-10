@@ -17,6 +17,7 @@ across per-game simulated probabilities.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 from dataclasses import dataclass, field
@@ -61,28 +62,91 @@ def _quantile(distribution: dist.DiscreteDistribution, u: float) -> int:
     return distribution.high
 
 
+def frechet_bounds(marginals: Sequence[float]) -> Tuple[float, float]:
+    """(upper, lower) limits on P(all of these) given only the individual probabilities.
+
+    These hold for ANY dependence structure. The upper bound is the smallest marginal —
+    an intersection cannot be likelier than its rarest member. The lower bound is
+    sum(p) - (n - 1), which bites when the legs are all likely: two 90% legs must land
+    together at least 80% of the time, because there is not enough probability left over
+    for them to miss separately.
+    """
+    if not marginals:
+        return 1.0, 1.0
+    upper = min(marginals)
+    lower = max(0.0, sum(marginals) - (len(marginals) - 1))
+    return upper, min(lower, upper)
+
+
+def game_seed(game_id: str) -> int:
+    """A per-game seed that is identical in every process.
+
+    `hash()` on a string is salted by PYTHONHASHSEED, so the previous implementation gave
+    a different seed after every restart and the same slate priced differently on reload.
+    A digest is stable forever, which is what "the recommendation does not move when you
+    refresh" actually requires.
+    """
+    digest = hashlib.blake2b(game_id.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % (2 ** 31)
+
+
+def _reconcile_parity(rng: random.Random, distribution: dist.DiscreteDistribution,
+                      total: int, margin: int) -> Optional[int]:
+    """Nudge the total to the parity the margin requires, or give up on this draw.
+
+    A scoreline only exists when `total` and `margin` share a parity: home is
+    (total + margin) / 2, and half a point is not a football score. The old code papered
+    over this by rounding home and away independently, which silently changed the margin —
+    a sampled 3 became a 4 whenever the total was even. Since the margin carries the key
+    numbers the whole distribution exists to model, the margin is what must be preserved.
+
+    So the total moves instead, by exactly one point, up or down in proportion to the mass
+    the total distribution puts on each neighbour. Over many draws that leaves the total's
+    own distribution essentially undisturbed while keeping every margin exactly as drawn.
+    """
+    if (total + margin) % 2 == 0:
+        return total
+    down, up = total - 1, total + 1
+    p_down = distribution.pmf(down) if down >= max(0, abs(margin)) else 0.0
+    p_up = distribution.pmf(up)
+    if p_down <= 0.0 and p_up <= 0.0:
+        return up if up >= abs(margin) else None
+    return down if rng.random() * (p_down + p_up) < p_down else up
+
+
 def simulate_game(projection: GameProjection, *, correlation: float = 0.0,
                   draws: int = DEFAULT_DRAWS,
                   seed: int = 0) -> List[Tuple[int, int]]:
     """Draw (home_score, away_score) pairs from a game's joint distribution.
 
     Margin and total are sampled through a Gaussian copula so their historical correlation
-    is preserved, then converted to scores. The seed is fixed per game so the same slate
-    produces the same parlay numbers on every refresh — a recommendation that changes when
-    you reload is not a recommendation.
+    is preserved, then converted to a valid integer scoreline. The seed is fixed per game
+    so the same slate produces the same parlay numbers on every refresh — a recommendation
+    that changes when you reload is not a recommendation.
+
+    Every requested draw is returned. The earlier version dropped any draw that implied a
+    negative score, which both shrank the sample below `draws` and biased what remained;
+    an impossible pair is now redrawn instead.
     """
     rng = random.Random(seed)
     out: List[Tuple[int, int]] = []
-    for _ in range(draws):
+    attempts = 0
+    limit = draws * 20        # generous: rejections are rare outside absurd projections
+    while len(out) < draws and attempts < limit:
+        attempts += 1
         z_margin, z_total = _norm_pair(rng, correlation)
         margin = _quantile(projection.margin, dist.normal_cdf(z_margin))
         total = _quantile(projection.total, dist.normal_cdf(z_total))
-        # Scores must be non-negative integers that reproduce the drawn margin and total.
-        home = (total + margin) / 2.0
-        away = (total - margin) / 2.0
+        if total < abs(margin):
+            continue          # a margin cannot exceed the points that produced it
+        adjusted = _reconcile_parity(rng, projection.total, total, margin)
+        if adjusted is None or adjusted < abs(margin):
+            continue
+        home = (adjusted + margin) // 2
+        away = (adjusted - margin) // 2
         if home < 0 or away < 0:
             continue
-        out.append((int(round(home)), int(round(away))))
+        out.append((home, away))
     return out
 
 
@@ -142,15 +206,19 @@ class SlateSimulator:
         self.draws = draws
         self._sims: Dict[str, List[Tuple[int, int]]] = {}
         self._home: Dict[str, str] = {}
+        # Marginals get asked for repeatedly while ranking combinations; recomputing them
+        # over 20k draws each time dominated the parlay search.
+        self._marginal_cache: Dict[str, Dict[int, float]] = {}
 
     def register(self, game_id: str, projection: GameProjection, home_team: str) -> None:
         if game_id in self._sims:
             return
-        # Deterministic per-game seed: stable results, still decorrelated between games.
-        seed = abs(hash(game_id)) % (2 ** 31)
+        # Deterministic per-game seed: stable across processes, still decorrelated between
+        # games. See game_seed() for why builtin hash() cannot be used here.
         self._sims[game_id] = simulate_game(projection, correlation=self.correlation,
-                                            draws=self.draws, seed=seed)
+                                            draws=self.draws, seed=game_seed(game_id))
         self._home[game_id] = home_team
+        self._marginal_cache.pop(game_id, None)
 
     def home_team(self, game_id: str) -> Optional[str]:
         return self._home.get(game_id)
@@ -168,7 +236,11 @@ class SlateSimulator:
         test = leg_predicate(signal, home)
         if test is None:
             return None
-        return sum(1 for h, a in sims if test(h, a)) / len(sims)
+        cache = self._marginal_cache.setdefault(signal.game_id, {})
+        key = id(signal)
+        if key not in cache:
+            cache[key] = sum(1 for h, a in sims if test(h, a)) / len(sims)
+        return cache[key]
 
     def joint_probability(self, legs: Sequence[Signal],
                           marginals: Optional[Sequence[float]] = None
@@ -228,18 +300,26 @@ class SlateSimulator:
                     return None
                 sim_independent *= p
 
+            ratio = (sim_joint / sim_independent) if sim_independent > 1e-9 else None
+            clamped = False
             if published:
+                group_marginals = [published[id(leg)] for leg in group]
                 group_naive = 1.0
-                for leg in group:
-                    group_naive *= published[id(leg)]
-                if sim_independent > 1e-9:
-                    # Borrow only the correlation ratio; keep the published levels.
-                    ratio = sim_joint / sim_independent
+                for p in group_marginals:
+                    group_naive *= p
+                if ratio is None:
+                    scaled = 0.0 if sim_joint <= 0 else group_naive
                 else:
-                    ratio = 0.0 if sim_joint <= 0 else 1.0
-                joint = group_naive * ratio
-                # A parlay can never be more likely than its least likely leg.
-                joint = min(joint, min(published[id(leg)] for leg in group))
+                    scaled = group_naive * ratio
+                # The ratio is measured on the RAW model while the marginals are
+                # market-blended, so their product is not guaranteed to be a coherent
+                # joint probability. Frechet says any joint must sit between
+                # max(0, sum(p) - (n-1)) and min(p). Outside that range the number is not
+                # merely imprecise, it is impossible, so it is clamped and the clamp is
+                # reported rather than hidden.
+                upper, lower = frechet_bounds(group_marginals)
+                joint = min(max(scaled, lower), upper)
+                clamped = abs(joint - scaled) > 1e-9
                 independent = group_naive
             else:
                 joint = sim_joint
@@ -252,15 +332,23 @@ class SlateSimulator:
                 "legs": len(group),
                 "joint_prob": round(joint, 5),
                 "independent_prob": round(independent, 5),
-                "correlation_ratio": round(sim_joint / sim_independent, 4)
-                                     if sim_independent > 1e-9 else None,
+                "correlation_ratio": round(ratio, 4) if ratio is not None else None,
                 "correlation_effect": round(joint - independent, 5),
+                "frechet_clamped": clamped,
             })
 
+        combined = max(0.0, min(combined, 1.0))
+        # Monte Carlo error on the tightest per-game estimate, propagated across games.
+        # Reported so a 4%-vs-3% comparison between two parlays is not read as meaningful
+        # when the simulation itself only resolves to half a point.
+        standard_error = math.sqrt(
+            max(combined * (1.0 - combined), 1e-12) / max(self.draws, 1))
         return {
-            "combined_prob": max(0.0, min(combined, 1.0)),
+            "combined_prob": combined,
             "naive_prob": naive,
             "correlation_effect": combined - naive,
             "per_game": per_game,
             "draws": self.draws,
+            "standard_error": standard_error,
+            "frechet_clamped": any(g["frechet_clamped"] for g in per_game),
         }
