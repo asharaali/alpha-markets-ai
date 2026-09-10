@@ -428,21 +428,66 @@ def prune_snapshots(older_than_days: float = 45.0) -> int:
 
 # ----------------------------------------------------------------- positions & parlays
 
+POSITION_COLUMNS = (
+    "id", "user", "created_at", "mode", "parlay_id", "game_id", "ticker", "side",
+    "label", "market_type", "contracts", "entry_price", "stake", "model_prob", "note",
+    "status", "team", "line", "selection", "client_order_id", "venue_order_id",
+    "requested_contracts", "filled_contracts", "remaining_contracts", "avg_fill_price",
+    "entry_fees", "model_version", "predicted_at", "recommendation_id",
+    "max_entry_price",
+)
+
+
 def open_position(**kwargs: Any) -> str:
+    """Record a position from the fills behind it, with the metadata to settle it later.
+
+    `contracts` is always the FILLED count. Requested and remaining are stored alongside
+    so a partial fill is visible as a partial fill rather than quietly looking like the
+    order the user asked for.
+    """
     init()
     position_id = uuid.uuid4().hex[:16]
+    values = {
+        "id": position_id,
+        "created_at": time.time(),
+        "status": kwargs.get("status") or "open",
+        **{k: kwargs.get(k) for k in POSITION_COLUMNS
+           if k not in ("id", "created_at", "status")},
+    }
+    columns = ", ".join(POSITION_COLUMNS)
+    marks = ", ".join("?" for _ in POSITION_COLUMNS)
     with transaction() as conn:
-        conn.execute(
-            """INSERT INTO positions
-               (id, user, created_at, mode, parlay_id, game_id, ticker, side, label,
-                market_type, contracts, entry_price, stake, model_prob, note)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (position_id, kwargs["user"], time.time(), kwargs["mode"],
-             kwargs.get("parlay_id"), kwargs.get("game_id"), kwargs["ticker"],
-             kwargs["side"], kwargs.get("label"), kwargs.get("market_type"),
-             kwargs["contracts"], kwargs["entry_price"], kwargs["stake"],
-             kwargs.get("model_prob"), kwargs.get("note")))
+        conn.execute(f"INSERT INTO positions ({columns}) VALUES ({marks})",
+                     tuple(values[c] for c in POSITION_COLUMNS))
     return position_id
+
+
+def staked_since(user: str, *, since: float, mode: Optional[str] = None) -> float:
+    """Total staked by this user since `since`, optionally restricted to one mode.
+
+    Read inside the same connection the limit check runs in. Paper and live are counted
+    separately by default because a simulated stake is not real exposure and must not
+    consume a real-money cap.
+    """
+    init()
+    if mode:
+        row = connection().execute(
+            "SELECT COALESCE(SUM(stake), 0) FROM positions "
+            "WHERE user=? AND mode=? AND created_at > ? AND status != 'rejected'",
+            (user, mode, since)).fetchone()
+    else:
+        row = connection().execute(
+            "SELECT COALESCE(SUM(stake), 0) FROM positions "
+            "WHERE user=? AND created_at > ? AND status != 'rejected'",
+            (user, since)).fetchone()
+    return float(row[0] or 0.0)
+
+
+def mark_reconciled(position_id: str) -> None:
+    init()
+    with transaction() as conn:
+        conn.execute("UPDATE positions SET last_reconciled_at=? WHERE id=?",
+                     (time.time(), position_id))
 
 
 def _open_contracts(row: Any) -> int:

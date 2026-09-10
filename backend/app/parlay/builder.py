@@ -29,11 +29,17 @@ from app.config import settings
 from app.core.logging import get_logger
 from app.core.types import CONFIDENCE_ORDER, Confidence, MarketType, Signal
 from app.data import teams
-from app.parlay import conflicts
+from app.parlay import conflicts, products
 from app.parlay.simulation import SlateSimulator
+from app.risk import fees
 from app.strategies import pricing
 
 log = get_logger(__name__)
+
+# The stake used to compute per-dollar figures that depend on contract counts (fees are
+# charged per contract, so EV per dollar is very slightly size-dependent). $100 is a round
+# reference size, not a recommendation.
+REFERENCE_STAKE = 100.0
 
 
 @dataclass
@@ -125,11 +131,26 @@ class Parlay:
     per_game: List[Dict[str, Any]] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
+    standard_error: float = 0.0
+    frechet_clamped: bool = False
+
     def to_dict(self) -> Dict[str, Any]:
+        leg_dicts = [leg.to_dict() for leg in self.legs]
+        priced_legs = [{"cost": leg.cost, "prob": leg.probability,
+                        "ticker": d.get("ticker"), "label": d.get("label")}
+                       for leg, d in zip(self.legs, leg_dicts)]
+
+        # Two products, priced separately and labelled. The all-or-nothing figure is
+        # analysis; the basket is what can actually be bought without a combo quote.
+        hypothetical = products.price_hypothetical_parlay(
+            priced_legs, joint_prob=self.combined_prob, stake=REFERENCE_STAKE,
+            standard_error=self.standard_error)
+        basket = products.price_basket(priced_legs, stake=REFERENCE_STAKE)
+
         return {
             "category": self.category,
             "leg_count": len(self.legs),
-            "legs": [leg.to_dict() for leg in self.legs],
+            "legs": leg_dicts,
             "model_probability": round(self.combined_prob, 4),
             "naive_multiplied_probability": round(self.naive_prob, 4),
             "correlation_effect": round(self.correlation_effect, 4),
@@ -138,10 +159,26 @@ class Parlay:
             "combined_cost_per_dollar": round(self.combined_cost, 4),
             "payout_multiple": round(self.payout_multiple, 2),
             "ev_per_dollar": round(self.ev_per_dollar, 4),
+            "ev_is_after_fees": True,
             "risk_rating": self.risk_rating,
             "explanation": self.explanation,
             "per_game": self.per_game,
             "warnings": self.warnings,
+            "standard_error": round(self.standard_error, 5),
+            "probability_range": [
+                round(max(0.0, self.combined_prob - 1.96 * self.standard_error), 4),
+                round(min(1.0, self.combined_prob + 1.96 * self.standard_error), 4),
+            ],
+            "frechet_clamped": self.frechet_clamped,
+            # The honest product breakdown. `executable` on each says whether it can be
+            # bought; the combo quote, when one exists, is attached later by the engine.
+            "products": {
+                "hypothetical_parlay": hypothetical,
+                "basket_of_singles": basket,
+                "kalshi_combo": None,
+            },
+            "comparison": products.compare(basket, hypothetical),
+            "reference_stake": REFERENCE_STAKE,
         }
 
 
@@ -220,7 +257,12 @@ def evaluate(legs: Sequence[Signal], simulator: SlateSimulator, category: str,
 
     combined_prob = float(joint["combined_prob"])
     payout_multiple = 1.0 / combined_cost
-    ev = (combined_prob / combined_cost) - 1.0
+    # Expected value NET of the fee that would actually be charged. Gross EV on a venue
+    # whose fee peaks at 1.75c per contract is not a number anyone should act on.
+    reference_contracts = max(int(REFERENCE_STAKE / combined_cost), 1)
+    net_ev = fees.expected_value_after_fees(prob=combined_prob, cost=combined_cost,
+                                            contracts=reference_contracts)
+    ev = net_ev if net_ev is not None else (combined_prob / combined_cost) - 1.0
 
     parlay_legs = [ParlayLeg(signal=s, probability=pricing.published_prob(s),
                              cost=float(s.quote.cost))       # type: ignore[union-attr]
@@ -253,6 +295,18 @@ def evaluate(legs: Sequence[Signal], simulator: SlateSimulator, category: str,
             f"{len(thin)} leg(s) have under $200 of resting depth — the quoted price may "
             "not be available in size.")
 
+    standard_error = float(joint.get("standard_error") or 0.0)
+    if standard_error > 0 and standard_error * 1.96 > 0.02 * max(combined_prob, 1e-6):
+        warnings.append(
+            f"Simulation error on this combination is about {standard_error * 196:.1f} "
+            "points at 95% confidence. Do not read small differences between parlays as "
+            "real.")
+    if joint.get("frechet_clamped"):
+        warnings.append(
+            "The correlation-adjusted probability fell outside the range the individual "
+            "leg probabilities allow, and was clamped to the nearest possible value. "
+            "Treat this combination's edge as unreliable.")
+
     return Parlay(
         category=category,
         legs=parlay_legs,
@@ -267,6 +321,8 @@ def evaluate(legs: Sequence[Signal], simulator: SlateSimulator, category: str,
         explanation=explanation,
         per_game=list(joint["per_game"]),
         warnings=warnings,
+        standard_error=standard_error,
+        frechet_clamped=bool(joint.get("frechet_clamped")),
     )
 
 

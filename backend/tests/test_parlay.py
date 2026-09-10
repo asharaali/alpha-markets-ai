@@ -197,12 +197,27 @@ class TestEvaluation:
         assert parlay.correlation_effect != 0.0
         assert any("orrelation" in line for line in parlay.explanation)
 
-    def test_ev_matches_the_definition(self, simulator, homes):
+    def test_ev_is_net_of_fees(self, simulator, homes):
+        """EV is reported after Kalshi's trading fee, not before it.
+
+        This assertion changed deliberately during the correctness audit. The old test
+        pinned the gross figure, which on a venue charging up to 1.75c per contract
+        systematically overstated every parlay on the board.
+        """
+        from app.parlay.builder import REFERENCE_STAKE
+        from app.risk import fees
+
         legs = [make_signal("a", game_id=GAME_A, team="KC", cost=0.50),
                 make_signal("b", game_id=GAME_B, team="SF", cost=0.50)]
         parlay = evaluate(legs, simulator, "balanced", homes)
-        expected = (parlay.combined_prob / parlay.combined_cost) - 1.0
+
+        contracts = max(int(REFERENCE_STAKE / parlay.combined_cost), 1)
+        expected = fees.expected_value_after_fees(
+            prob=parlay.combined_prob, cost=parlay.combined_cost, contracts=contracts)
         assert parlay.ev_per_dollar == pytest.approx(expected)
+
+        gross = (parlay.combined_prob / parlay.combined_cost) - 1.0
+        assert parlay.ev_per_dollar < gross, "fees must reduce the reported edge"
 
     def test_a_single_leg_is_not_a_parlay(self, simulator, homes):
         legs = [make_signal("a", game_id=GAME_A, team="KC")]
