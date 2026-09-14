@@ -262,12 +262,83 @@ def _rows(cursor: sqlite3.Cursor) -> List[Dict[str, Any]]:
 
 # ----------------------------------------------------------------- predictions
 
+# A refresh is only worth storing if the view actually moved. Below this, the new row is
+# the same opinion at the same price and adds nothing but sample-size inflation.
+MATERIAL_PROB_CHANGE = 0.01
+MATERIAL_COST_CHANGE = 0.01
+
+
+def _is_redundant(previous: Any, entry: Dict[str, Any], now: float) -> bool:
+    """Would storing this row add evidence, or only add rows?
+
+    Redundant means both: inside the hourly window, OR materially unchanged. An opinion
+    that has not moved and a price that has not moved describe the same forecast already on
+    file.
+    """
+    if now - float(previous["created_at"]) < 3600:
+        return True
+
+    def moved(a: Any, b: Any, threshold: float) -> bool:
+        if a is None or b is None:
+            return a is not b
+        return abs(float(a) - float(b)) >= threshold
+
+    if moved(previous["fair_prob"], entry.get("fair_prob"), MATERIAL_PROB_CHANGE):
+        return False
+    if moved(previous["model_prob"], entry.get("model_prob"), MATERIAL_PROB_CHANGE):
+        return False
+    if moved(previous["cost"], entry.get("cost"), MATERIAL_COST_CHANGE):
+        return False
+    return True
+
+
+def _kickoff_ts(kickoff: Any) -> Optional[float]:
+    """Kickoff as a POSIX timestamp. Stored so closing-line value has a cutoff to use."""
+    if kickoff is None:
+        return None
+    if isinstance(kickoff, (int, float)):
+        return float(kickoff)
+    try:
+        from datetime import datetime, timezone
+        parsed = datetime.fromisoformat(str(kickoff).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _horizon_hours(kickoff: Any, now: float) -> Optional[float]:
+    """Hours from now until kickoff. Counts DOWN, so bigger means earlier."""
+    if kickoff is None:
+        return None
+    if isinstance(kickoff, (int, float)):
+        return (float(kickoff) - now) / 3600.0
+    try:
+        from datetime import datetime, timezone
+        parsed = datetime.fromisoformat(str(kickoff).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return (parsed.timestamp() - now) / 3600.0
+    except (ValueError, TypeError):
+        return None
+
+
 def record_predictions(entries: Sequence[Dict[str, Any]]) -> int:
     """Persist predictions before their outcomes exist. Returns the number written.
 
-    Duplicate suppression is by (game_id, strategy, ticker, selection) within the same
-    hour: the snapshot job runs repeatedly and we want a trail of how a view evolved, not
-    one row per poll.
+    Two suppression rules, because the hourly rule alone was not enough. The snapshot job
+    runs every hour for the whole week before a game, so one view on one contract produced
+    dozens of rows; across a slate that reached 155,058 rows covering 16 games, and the
+    performance page counted 134,560 of them as independent settled predictions.
+
+    So a refresh is now written only if it is BOTH outside the hourly window AND materially
+    different from the last stored row — a probability or price move of at least a cent.
+    An unchanged opinion at an unchanged price is not new evidence and no longer pretends
+    to be.
+
+    The forecast's distance from kickoff is stored alongside, so evaluation can ask what
+    the model believed 24 hours out rather than averaging every horizon together.
     """
     if not entries:
         return 0
@@ -276,21 +347,22 @@ def record_predictions(entries: Sequence[Dict[str, Any]]) -> int:
     now = time.time()
     with transaction() as conn:
         for entry in entries:
-            recent = conn.execute(
-                "SELECT 1 FROM predictions WHERE game_id=? AND strategy=? "
-                "AND IFNULL(ticker,'')=? AND selection=? AND created_at > ? LIMIT 1",
+            previous = conn.execute(
+                "SELECT created_at, fair_prob, model_prob, cost FROM predictions "
+                "WHERE game_id=? AND strategy=? AND IFNULL(ticker,'')=? AND selection=? "
+                "ORDER BY created_at DESC LIMIT 1",
                 (entry["game_id"], entry["strategy"], entry.get("ticker") or "",
-                 entry["selection"], now - 3600),
+                 entry["selection"]),
             ).fetchone()
-            if recent:
+            if previous is not None and _is_redundant(previous, entry, now):
                 continue
             conn.execute(
                 """INSERT OR IGNORE INTO predictions
                    (id, created_at, season, week, game_id, kickoff, strategy, market_type,
                     ticker, selection, label, team, player, line, model_prob, fair_prob,
                     market_prob, edge, ev_per_dollar, confidence, cost, depth_usd,
-                    reasoning)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    reasoning, forecast_key, kickoff_ts, horizon_hours, model_version)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (uuid.uuid4().hex[:16], now, entry["season"], entry["week"],
                  entry["game_id"], entry.get("kickoff"), entry["strategy"],
                  entry["market_type"], entry.get("ticker"), entry["selection"],
@@ -299,7 +371,12 @@ def record_predictions(entries: Sequence[Dict[str, Any]]) -> int:
                  entry.get("market_prob"), entry.get("edge"),
                  entry.get("ev_per_dollar"), entry.get("confidence"),
                  entry.get("cost"), entry.get("depth_usd"),
-                 json.dumps(entry.get("reasoning") or [])),
+                 json.dumps(entry.get("reasoning") or []),
+                 "|".join(str(entry.get(p) or "") for p in
+                          ("game_id", "strategy", "market_type", "selection")),
+                 _kickoff_ts(entry.get("kickoff")),
+                 _horizon_hours(entry.get("kickoff"), now),
+                 entry.get("model_version")),
             )
             written += 1
     if written:

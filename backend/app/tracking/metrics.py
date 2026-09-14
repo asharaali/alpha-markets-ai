@@ -28,6 +28,11 @@ BUCKETS = [(0.0, 0.1), (0.1, 0.2), (0.2, 0.3), (0.3, 0.4), (0.4, 0.5),
 # Below this, a metric is reported but explicitly marked as not yet meaningful.
 MEANINGFUL_SAMPLE = 30
 
+# The threshold that actually governs whether a scorecard means anything. Counted in GAMES,
+# not rows: six contracts on one game are six presentations of one scoreline, and a page
+# reporting n=4,077 from 16 games was reporting confidence it did not have.
+MEANINGFUL_GAMES = 30
+
 
 def brier(probs: Sequence[float], outcomes: Sequence[int]) -> Optional[float]:
     """Mean squared error of the probability. Lower is better; 0.25 is a coin flip."""
@@ -169,13 +174,30 @@ def equity_curve(predictions: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def summarise(predictions: Sequence[Dict[str, Any]], *,
-              label: str = "all") -> Dict[str, Any]:
+              label: str = "all", collapse_refreshes: bool = True,
+              checkpoint: Optional[float] = None) -> Dict[str, Any]:
     """The full scorecard for a set of settled predictions.
 
     Every model probability is scored against the market probability recorded at the same
     moment, so 'is this better than just taking the price?' is answerable directly.
+
+    `collapse_refreshes` is the correction that matters most here. The snapshot job writes
+    a fresh prediction row every hour, so one forecast on one game appears dozens of times.
+    In the live database that turned 16 games into 54,422 rows and 4,077 settled
+    "predictions", every one of which the old version of this function counted as
+    independent evidence. It is not: a forecast refreshed 43 times is one forecast observed
+    43 times, and reporting n=4,077 overstated the evidence by roughly 250x.
+
+    Rows are therefore collapsed to the last forecast per contract before kickoff, and the
+    reported sample size carries the GAME count beside the row count, because games are the
+    independent unit — every contract on one game resolves off one scoreline.
     """
+    from app.evaluation import protocol
+
     settled = [p for p in predictions if p.get("outcome") is not None]
+    raw_rows = len(settled)
+    if collapse_refreshes and settled:
+        settled = protocol.deduplicate(settled, checkpoint=checkpoint)
     n = len(settled)
     if n == 0:
         return {
@@ -192,15 +214,30 @@ def summarise(predictions: Sequence[Dict[str, Any]], *,
     money = roi(settled)
     hits = sum(outcomes)
 
+    games = len({p.get("game_id") for p in settled if p.get("game_id")})
+    scored = [{"game_id": p.get("game_id"),
+               "brier": (float(p.get("fair_prob") or p["model_prob"]) - int(p["outcome"])) ** 2}
+              for p in settled]
+    clustered = protocol.clustered_mean(scored, "brier")
+
+    # The honest sample size is the number of GAMES. Everything else is a presentation of
+    # the same handful of scorelines.
+    meaningful = games >= MEANINGFUL_GAMES
+
     return {
         "label": label,
         "n": n,
-        "meaningful": n >= MEANINGFUL_SAMPLE,
+        "games": games,
+        "raw_rows": raw_rows,
+        "refreshes_collapsed": raw_rows - n,
+        "meaningful": meaningful,
         "hits": hits,
         "misses": n - hits,
         "hit_rate": round(hits / n, 4),
         "average_predicted": round(sum(model_probs) / n, 4),
         "brier": _round(brier(model_probs, outcomes)),
+        "brier_se": _round(clustered["standard_error"], 5)
+                    if clustered and clustered.get("standard_error") else None,
         "brier_market": _round(brier(market_probs, market_outcomes)) if market_probs else None,
         "log_loss": _round(log_loss(model_probs, outcomes)),
         "log_loss_market": _round(log_loss(market_probs, market_outcomes)) if market_probs else None,
@@ -210,12 +247,19 @@ def summarise(predictions: Sequence[Dict[str, Any]], *,
         "expected_vs_actual": expected_vs_actual(settled),
         "clv": closing_line_value(settled),
         "drawdown": drawdown([p["cumulative"] for p in equity_curve(settled)]),
+        "sample_note": (
+            f"{n} forecast(s) across {games} game(s)."
+            + (f" {raw_rows - n} repeated refresh(es) of the same forecast were collapsed; "
+               "counting them separately would overstate the evidence."
+               if raw_rows > n else "")),
         "note": (
-            f"Only {n} settled prediction(s) — too few to draw conclusions from. "
-            f"{MEANINGFUL_SAMPLE} is the point at which these numbers start to mean "
-            "something." if n < MEANINGFUL_SAMPLE else
+            f"Only {games} settled game(s) — too few to draw conclusions from. "
+            f"{MEANINGFUL_GAMES} games is roughly where these numbers start to mean "
+            "something, and contracts are not games." if not meaningful else
             "Model probabilities are scored against the market probability recorded at "
-            "the same moment; beating that column is the benchmark that matters."
+            "the same moment; beating that column is the benchmark that matters. The "
+            "interval is computed between games, because contracts on one game share a "
+            "scoreline."
         ),
     }
 

@@ -88,9 +88,18 @@ class TestUnsettleableMarkets:
 
 
 class TestMetrics:
-    def rows(self, pairs, cost=0.5):
+    def rows(self, pairs, cost=0.5, same_game=False):
+        """Independent settled forecasts, one per game unless `same_game` is set.
+
+        Each row gets its own game_id and selection because that is what independent
+        evidence looks like. Rows sharing a game and selection are the SAME forecast
+        refreshed, and summarise() now collapses those on purpose — see `same_game` below,
+        which builds that case deliberately.
+        """
         return [{"model_prob": p, "fair_prob": p, "market_prob": p, "outcome": o,
                  "cost": cost, "strategy": "s", "market_type": "m", "confidence": "high",
+                 "game_id": "G0" if same_game else f"G{i}",
+                 "selection": "pick" if same_game else f"pick{i}",
                  "created_at": i, "settled_at": i, "ev_per_dollar": 0.0}
                 for i, (p, o) in enumerate(pairs)]
 
@@ -132,8 +141,35 @@ class TestMetrics:
 
     def test_summary_flags_a_small_sample_as_not_meaningful(self):
         summary = metrics.summarise(self.rows([(0.6, 1)] * 5))
-        assert summary["n"] == 5 and summary["meaningful"] is False
+        assert summary["n"] == 5 and summary["games"] == 5
+        assert summary["meaningful"] is False
         assert "too few" in summary["note"]
+
+    def test_repeated_refreshes_of_one_forecast_count_once(self):
+        """The 250x inflation, at the level the performance page reports it.
+
+        Forty-three hourly refreshes of one view on one game is one forecast, not 43
+        observations. The live database held 54,422 such rows across 16 games.
+        """
+        summary = metrics.summarise(self.rows([(0.6, 1)] * 43, same_game=True))
+        assert summary["raw_rows"] == 43
+        assert summary["n"] == 1
+        assert summary["games"] == 1
+        assert summary["refreshes_collapsed"] == 42
+        assert "collapsed" in summary["sample_note"]
+
+    def test_many_contracts_on_one_game_are_one_game_of_evidence(self):
+        rows = []
+        for i in range(24):
+            rows.append({"model_prob": 0.6, "fair_prob": 0.6, "market_prob": 0.55,
+                         "outcome": 1, "cost": 0.55, "strategy": "s",
+                         "market_type": "m", "confidence": "high", "game_id": "G0",
+                         "selection": f"contract{i}", "created_at": i,
+                         "settled_at": i, "ev_per_dollar": 0.0})
+        summary = metrics.summarise(rows)
+        assert summary["n"] == 24, "distinct contracts are distinct forecasts"
+        assert summary["games"] == 1, "but they share one scoreline"
+        assert summary["meaningful"] is False
 
     def test_summary_on_no_data_explains_itself(self):
         summary = metrics.summarise([])

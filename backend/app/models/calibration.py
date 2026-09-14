@@ -188,7 +188,8 @@ def _is_indoor(game) -> bool:
 
 # --------------------------------------------------------------------- key numbers
 
-async def fit_key_numbers(from_season: int = KEY_NUMBER_FROM_SEASON
+async def fit_key_numbers(from_season: int = KEY_NUMBER_FROM_SEASON,
+                          before_season: Optional[int] = None
                           ) -> Tuple[Dict[int, float], Dict[int, float], int]:
     """Empirical key-number multipliers for margin and total.
 
@@ -196,10 +197,15 @@ async def fit_key_numbers(from_season: int = KEY_NUMBER_FROM_SEASON
     often each exact outcome should occur, sum those expectations across all games, and
     compare to what actually happened. Margins of 3 land far more often than smoothness
     predicts; that ratio is the multiplier.
+
+    `before_season` excludes that season and everything after it. Walk-forward evaluation
+    needs this: a profile fitted on the seasons being scored has already seen how often 3
+    landed in them, and a model that knows the answer is not being tested.
     """
     games = await nflverse.schedule()
     rows = [g for g in games
             if g.completed and g.season >= from_season
+            and (before_season is None or g.season < before_season)
             and g.spread_line is not None and g.total_line is not None
             and g.margin is not None and g.total_points is not None]
     if len(rows) < 500:
@@ -263,28 +269,46 @@ def _sigma(residuals: Sequence[float]) -> float:
 # --------------------------------------------------------------------- second stage
 
 async def fit(*, seasons: Optional[Sequence[int]] = None,
-              force: bool = False) -> GameModelArtifact:
+              force: bool = False, before_season: Optional[int] = None,
+              persist: bool = True) -> GameModelArtifact:
     """Fit (or load) the game-model artifact.
 
-    Walk-forward by construction: the ratings used as predictors for a week-N game are
-    built from weeks 1..N-1 only. This is the same guarantee the backtester relies on, and
-    the reason the reported RMSE is a fair estimate of live error.
+    The ratings used as predictors for a week-N game are built from weeks 1..N-1 only.
+    That part was always walk-forward. The SECOND stage — these coefficients, the residual
+    sigmas, the margin/total correlation, the key-number profiles — is fitted by pooling
+    whatever seasons it is given, and pooling the seasons you then score against is a leak.
+
+    `before_season` closes it: pass it and nothing at or after that season enters the fit.
+    The live app calls this without it, which is correct, because in production every past
+    season really is available. Only evaluation needs the restriction, and evaluation must
+    use it.
     """
-    if not force:
+    if not force and before_season is None:
         cached = load()
         if cached is not None:
             return cached
 
     started = time.time()
-    usable = await nflverse.available_seasons(settings.SEASON,
-                                              max(settings.CALIBRATION_SEASONS, 4))
+    # An as-of fit probes backwards from the season before its cutoff, and probes further,
+    # because it has fewer seasons available to it by construction and still needs enough
+    # games to fit a second stage on.
+    probe_from = (before_season - 1) if before_season is not None else settings.SEASON
+    probe_back = (max(settings.CALIBRATION_SEASONS, 4) + 3 if before_season is not None
+                  else max(settings.CALIBRATION_SEASONS, 4))
+    usable = await nflverse.available_seasons(probe_from, probe_back)
     if not usable:
         raise SingularSystem("no play-by-play seasons available to fit the game model")
     # Need at least one prior season behind each fitted season for week-1 ratings.
     fit_seasons = sorted(s for s in usable if (s - 1) in usable)
+    if before_season is not None:
+        fit_seasons = [s for s in fit_seasons if s < before_season]
     if seasons:
         fit_seasons = [s for s in fit_seasons if s in set(seasons)]
     if not fit_seasons:
+        if before_season is not None:
+            raise SingularSystem(
+                f"no seasons available strictly before {before_season}; an as-of fit "
+                "cannot be built without history behind it")
         fit_seasons = [max(usable)]
 
     schedule = await nflverse.schedule(seasons=fit_seasons)
@@ -328,7 +352,7 @@ async def fit(*, seasons: Optional[Sequence[int]] = None,
     margin_resid = [a - p for a, p in zip(margin_y, margin_pred)]
     total_resid = [a - p for a, p in zip(total_y, total_pred)]
 
-    m_profile, t_profile, key_games = await fit_key_numbers()
+    m_profile, t_profile, key_games = await fit_key_numbers(before_season=before_season)
 
     artifact = GameModelArtifact(
         version=ARTIFACT_VERSION,
@@ -350,7 +374,8 @@ async def fit(*, seasons: Optional[Sequence[int]] = None,
         total_key_profile={str(k): round(v, 5) for k, v in t_profile.items()},
         key_number_games=key_games,
     )
-    save(artifact)
+    if persist:
+        save(artifact)
     log.info("game model fitted on %d games from %s in %.1fs "
              "(margin RMSE %.2f, sigma %.2f; total RMSE %.2f, sigma %.2f)",
              artifact.sample_games, fit_seasons, time.time() - started,
@@ -397,6 +422,36 @@ def _diagnostics(names: Sequence[str], fit, shipped: Sequence[float]
             "supported": abs(t) >= 2.0,
         })
     return out
+
+
+async def fit_as_of(season: int, *, force: bool = False) -> GameModelArtifact:
+    """The artifact a forecaster standing at the start of `season` could have had.
+
+    This is the fix for the leak the old backtest documented but did not close. Ratings
+    were walk-forward, but the second-stage coefficients, the residual sigmas, the
+    margin/total correlation and the key-number profiles were all fitted by pooling every
+    season in the request — including the ones being scored. A model that has seen the
+    seasons it is being graded on is not being graded.
+
+    Everything here is fitted strictly on seasons before `season`. Artifacts are cached on
+    disk per as-of year, because refitting the whole second stage for each of a few hundred
+    walk-forward weeks would take hours and produce the same numbers.
+    """
+    path = ARTIFACT_DIR / f"game_model_asof_{season}.json"
+    if not force and path.exists():
+        try:
+            blob = json.loads(path.read_text())
+            if blob.get("version") == ARTIFACT_VERSION:
+                return GameModelArtifact(**blob)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    artifact = await fit(before_season=season, persist=False, force=True)
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(asdict(artifact), indent=2))
+    log.info("fitted as-of-%d artifact on seasons %s (%d games)",
+             season, artifact.seasons_fitted, artifact.sample_games)
+    return artifact
 
 
 def save(artifact: GameModelArtifact) -> None:
