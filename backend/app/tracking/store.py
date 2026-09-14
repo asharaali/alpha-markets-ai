@@ -681,19 +681,33 @@ def positions_for(user: str, *, status: Optional[str] = None) -> List[Dict[str, 
 
 
 def save_parlay(**kwargs: Any) -> str:
+    """Record a multi-leg position, tagged with WHICH PRODUCT was bought.
+
+    `product` is stored because a basket of singles and a combination contract pay
+    differently, and a record that does not say which one this was cannot be reconciled
+    later. `pricing_basis` records whether the price came from a real book or a
+    calculation.
+    """
     init()
     parlay_id = uuid.uuid4().hex[:16]
     with transaction() as conn:
         conn.execute(
             """INSERT INTO parlays
                (id, user, created_at, mode, category, legs, leg_count, naive_prob,
-                combined_prob, combined_odds, ev_per_dollar, risk_rating, stake)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                combined_prob, combined_odds, ev_per_dollar, risk_rating, stake,
+                product, executable, pricing_basis, max_payout, total_fees,
+                standard_error)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (parlay_id, kwargs["user"], time.time(), kwargs["mode"], kwargs["category"],
              json.dumps(kwargs["legs"]), kwargs["leg_count"], kwargs.get("naive_prob"),
              kwargs.get("combined_prob"), kwargs.get("combined_odds"),
              kwargs.get("ev_per_dollar"), kwargs.get("risk_rating"),
-             kwargs.get("stake", 0.0)))
+             kwargs.get("stake", 0.0),
+             kwargs.get("product", "basket_of_singles"),
+             1 if kwargs.get("executable", True) else 0,
+             kwargs.get("pricing_basis", "live_order_books"),
+             kwargs.get("max_payout"), kwargs.get("total_fees"),
+             kwargs.get("standard_error")))
     return parlay_id
 
 
@@ -751,16 +765,37 @@ def set_bankroll(user: str, *, starting: Optional[float] = None,
 
 
 def stats_snapshot() -> Dict[str, Any]:
-    """Row counts, for the health endpoint and the empty-state copy."""
+    """Counts for the health endpoint and the empty-state copy.
+
+    Both the row count AND the game count, because only one of them is evidence. The
+    header used to read "155,266 predictions recorded, 134,560 settled", which sounds like
+    a large track record and is in fact 16 games observed hourly for a week.
+    """
     init()
     conn = connection()
+
     def count(table: str) -> int:
         return conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+
+    def scalar(sql: str) -> int:
+        return conn.execute(sql).fetchone()["n"]
+
     return {
         "predictions": count("predictions"),
-        "settled_predictions": conn.execute(
-            "SELECT COUNT(*) AS n FROM predictions WHERE status='settled'").fetchone()["n"],
+        "settled_predictions": scalar(
+            "SELECT COUNT(*) AS n FROM predictions WHERE status='settled'"),
+        # The honest denominators.
+        "games_forecast": scalar(
+            "SELECT COUNT(DISTINCT game_id) AS n FROM predictions"),
+        "games_settled": scalar(
+            "SELECT COUNT(DISTINCT game_id) AS n FROM predictions WHERE status='settled'"),
+        "distinct_forecasts": scalar(
+            "SELECT COUNT(*) AS n FROM (SELECT DISTINCT game_id, strategy, market_type, "
+            "selection FROM predictions)"),
         "market_snapshots": count("market_snapshots"),
         "positions": count("positions"),
         "parlays": count("parlays"),
+        "counting_note": (
+            "Rows are contracts observed repeatedly; games are the independent unit of "
+            "evidence. Quote the game count."),
     }

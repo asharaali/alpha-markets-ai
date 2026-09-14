@@ -32,6 +32,21 @@ from app.tracking import metrics, store
 
 log = get_logger(__name__)
 
+# Plain-English names for the strategies, used wherever reasoning reaches a person. The
+# module keys stay as they are — they are the right identifier in a database row and the
+# wrong one on a card someone is reading to decide whether to risk money.
+STRATEGY_LABELS = {
+    "game_lines": "The game model",
+    "book_consensus": "Sportsbook consensus",
+    "matchup": "Matchup analysis",
+    "line_movement": "Line movement",
+    "mispricing": "Cross-market pricing",
+    "situational": "Situational spots",
+    "injury_impact": "Injury impact",
+    "props": "Player form",
+    "ensemble": "The ensemble",
+}
+
 # Prior weight per strategy before any track record exists. The core game model carries
 # most of the weight; the matchup view tilts; movement corroborates but does not predict.
 PRIOR_WEIGHTS: Dict[str, float] = {
@@ -172,7 +187,12 @@ def _blend(members: List[Signal], multipliers: Dict[str, float]) -> Optional[Sig
     reasoning: List[str] = []
     for signal in sorted(members, key=lambda s: -_weight_for(s.strategy, multipliers)):
         head = signal.reasoning[0] if signal.reasoning else ""
-        reasoning.append(f"[{signal.strategy}] {pricing.published_prob(signal):.1%}"
+        # Named in words rather than by module key. "[book_consensus] 18.7%" is a line
+        # about the codebase; "Sportsbook consensus says 18.7%" is a line about the bet,
+        # and only the second belongs in front of someone deciding whether to place one.
+        label = STRATEGY_LABELS.get(signal.strategy,
+                                    signal.strategy.replace("_", " ").capitalize())
+        reasoning.append(f"{label} says {pricing.published_prob(signal):.1%}"
                          + (f" — {head}" if head else ""))
     if spread > 0.06:
         reasoning.append(

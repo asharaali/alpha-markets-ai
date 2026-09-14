@@ -20,6 +20,17 @@ class PlaceOrderRequest(BaseModel):
     label: Optional[str] = None
     market_type: Optional[str] = None
     model_prob: Optional[float] = Field(default=None, ge=0, le=1)
+    # Settlement metadata. Without these the resolver cannot grade the position later, and
+    # the old code sent none of them.
+    team: Optional[str] = None
+    line: Optional[float] = None
+    selection: Optional[str] = None
+    # The price the user was shown, and the worst price they will accept. The order is
+    # refused rather than filled if the live book is past the ceiling.
+    recommended_cost: Optional[float] = Field(default=None, gt=0, lt=1)
+    max_entry_price: Optional[float] = Field(default=None, gt=0, lt=1)
+    recommendation_id: Optional[str] = None
+    model_version: Optional[str] = None
 
 
 class ParlayLegRequest(BaseModel):
@@ -40,10 +51,29 @@ class PlaceParlayRequest(BaseModel):
     combined_odds: Optional[float] = None
     ev_per_dollar: Optional[float] = None
     risk_rating: Optional[str] = None
+    # WHICH PRODUCT is being bought. There is no default: the caller must say, because the
+    # two pay differently and conflating them was the original defect. "basket_of_singles"
+    # buys N separate contracts with additive payouts; "kalshi_combo" buys one real
+    # combination contract and requires a quoted ticker.
+    product: Literal["basket_of_singles", "kalshi_combo"] = "basket_of_singles"
+    combo_ticker: Optional[str] = None
 
 
 class ClosePositionRequest(BaseModel):
     position_id: str = Field(min_length=4, max_length=64)
+    # None closes everything still held; a smaller number leaves the remainder open.
+    contracts: Optional[int] = Field(default=None, gt=0, le=100000)
+
+
+class PreflightRequest(BaseModel):
+    """Re-check a recommendation against the live book without placing anything."""
+
+    ticker: str = Field(min_length=3, max_length=120)
+    side: Literal["yes", "no"] = "yes"
+    stake: float = Field(gt=0, le=10000)
+    model_prob: Optional[float] = Field(default=None, ge=0, le=1)
+    recommended_cost: Optional[float] = Field(default=None, gt=0, lt=1)
+    max_entry_price: Optional[float] = Field(default=None, gt=0, lt=1)
 
 
 class BankrollRequest(BaseModel):

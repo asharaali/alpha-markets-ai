@@ -1,21 +1,34 @@
 /* Application shell: routing, session, and the persistent chrome. */
 
-import { api, el, relativeTime, pct } from "./core.js?v=2.1.4";
-import { dashboard, games, gameDetail, predictions, markets } from "./views-research.js?v=2.1.4";
-import { strategies, modelLab, performance, backtests } from "./views-model.js?v=2.1.4";
-import { parlays, portfolio, settings, applyTheme } from "./views-portfolio.js?v=2.1.4";
+import { api, el, relativeTime, pct } from "./core.js?v=3";
+import { games, gameDetail, predictions, markets } from "./views-research.js?v=3";
+import { strategies, modelLab, backtests } from "./views-model.js?v=3";
+import { portfolio, settings, applyTheme } from "./views-portfolio.js?v=3";
+import { overview, myBets, performance } from "./views-decisions.js?v=3";
+import { parlays } from "./views-parlays.js?v=3";
 
+/* Navigation is organised around DECISIONS AND POSITIONS, not around subsystems.
+ *
+ * The old menu had eleven entries grouped by which part of the codebase produced them —
+ * Dashboard, Games, Predictions, Parlays, Markets, Strategies, Model Lab, Performance,
+ * Backtests, Portfolio, Settings. A person deciding whether to place a bet had to know
+ * which of those held the answer.
+ *
+ * The six primary entries below are the six questions someone actually arrives with. The
+ * research surfaces still exist and still work; they are grouped under "Research" because
+ * they are for interrogating the model, not for deciding a bet. */
 const ROUTES = [
-  { path: "#/", title: "Dashboard", group: "Overview", view: dashboard, nav: true },
-  { path: "#/games", title: "Today's Games", group: "NFL", view: games, nav: true },
-  { path: "#/predictions", title: "Predictions", group: "NFL", view: predictions, nav: true },
-  { path: "#/parlays", title: "Parlays", group: "NFL", view: parlays, nav: true },
-  { path: "#/markets", title: "Markets", group: "NFL", view: markets, nav: true },
+  { path: "#/", title: "Overview", group: "Decide", view: overview, nav: true },
+  { path: "#/games", title: "Games", group: "Decide", view: games, nav: true },
+  { path: "#/parlays", title: "Parlays", group: "Decide", view: parlays, nav: true },
+  { path: "#/bets", title: "My Bets", group: "Track", view: myBets, nav: true },
+  { path: "#/performance", title: "Performance", group: "Track", view: performance, nav: true },
+  { path: "#/predictions", title: "All predictions", group: "Research", view: predictions, nav: true },
+  { path: "#/markets", title: "Markets", group: "Research", view: markets, nav: true },
   { path: "#/strategies", title: "Strategies", group: "Research", view: strategies, nav: true },
   { path: "#/model", title: "Model Lab", group: "Research", view: modelLab, nav: true },
-  { path: "#/performance", title: "Performance", group: "Research", view: performance, nav: true },
   { path: "#/backtests", title: "Backtests", group: "Research", view: backtests, nav: true },
-  { path: "#/portfolio", title: "Portfolio", group: "Account", view: portfolio, nav: true },
+  { path: "#/portfolio", title: "Bankroll", group: "Account", view: portfolio, nav: true },
   { path: "#/settings", title: "Settings", group: "Account", view: settings, nav: true },
   { path: "#/game/", title: "Game", group: null, view: gameDetail, nav: false },
 ];
@@ -93,9 +106,12 @@ async function refreshStatus() {
       el("span", {}, el("span", { class: `status-dot ${calibrating ? "warn" : "ok"}` }),
         calibrating ? "Model calibrating" : "Live"),
       el("span", { class: "mono-sm", text: `Week ${health.week ?? "—"} · ${health.season}` }),
+      // Games, not rows. The row count reads as a large track record and is in fact a
+      // handful of games observed hourly for a week.
       el("span", { class: "mono-sm",
-        text: `${health.database.predictions.toLocaleString()} predictions recorded, `
-            + `${health.database.settled_predictions.toLocaleString()} settled` }),
+        title: health.database.counting_note || "",
+        text: `${(health.database.games_settled ?? 0).toLocaleString()} games settled `
+            + `of ${(health.database.games_forecast ?? 0).toLocaleString()} forecast` }),
       el("span", { class: "mono-sm", text: `v${health.version}` }));
   } catch {
     foot.replaceChildren(el("span", { class: "status-dot bad" }), "server unreachable");
