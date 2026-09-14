@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from app.core.types import Game, MarketType, StrategyMeta
-from app.data import teams
+from app.data import availability, teams
 from app.data.nflverse import InjuryReport
 from app.models.ratings import RatingSet
 from app.strategies.base import ProjectionAdjustment
@@ -150,22 +150,50 @@ def adjust(game: Game, ratings: RatingSet, *,
            injuries: Dict[str, List[InjuryReport]],
            depth_chart: Dict[str, List[Dict[str, object]]],
            weather: Optional[Dict[str, object]] = None) -> ProjectionAdjustment:
+    """Points of margin and total from availability — and honesty about not knowing.
+
+    The key change from the original: a team ABSENT from the injury dictionary is not the
+    same as a team with a clean report. `injuries.get(team, [])` returned an empty list for
+    both, so a team whose data never arrived was projected as fully healthy with full
+    confidence. Missing data now widens the margin distribution and is reported as missing,
+    which is the opposite of what it used to do.
+    """
+    home_known = game.home in injuries
+    away_known = game.away in injuries
+
     home = team_impact(injuries.get(game.home, []), depth_chart.get(game.home, []))
     away = team_impact(injuries.get(game.away, []), depth_chart.get(game.away, []))
 
-    # Home losses hurt the home margin; away losses help it.
-    margin_shift = away["margin_loss"] - home["margin_loss"]
-    total_shift = home["total_shift"] + away["total_shift"]
-    sigma_add = (home["uncertainty_points"] ** 2 + away["uncertainty_points"] ** 2) ** 0.5
+    # Only shift the margin by what is actually known. An unknown team contributes no
+    # shift — guessing zero would be the same mistake in the other direction.
+    home_loss = home["margin_loss"] if home_known else 0.0
+    away_loss = away["margin_loss"] if away_known else 0.0
+    margin_shift = away_loss - home_loss
+    total_shift = ((home["total_shift"] if home_known else 0.0)
+                   + (away["total_shift"] if away_known else 0.0))
+
+    variance = ((home["uncertainty_points"] if home_known else 0.0) ** 2
+                + (away["uncertainty_points"] if away_known else 0.0) ** 2)
+    unknown_teams = [abbr for abbr, known in ((game.home, home_known),
+                                              (game.away, away_known)) if not known]
+    variance += len(unknown_teams) * (availability.UNKNOWN_SIGMA_POINTS["injuries"] ** 2)
+    sigma_add = variance ** 0.5
 
     reasons: List[str] = []
-    for side, data in (("home", home), ("away", away)):
-        abbr = game.home if side == "home" else game.away
+    for known, data, abbr in ((home_known, home, game.home),
+                              (away_known, away, game.away)):
+        if not known:
+            reasons.append(
+                f"No injury report available for {teams.display(abbr)} — availability is "
+                "UNKNOWN, not assumed healthy, and the projection is widened accordingly")
+            continue
         if data["items"]:
             top = data["items"][0]
             reasons.append(
                 f"{teams.display(abbr)} injuries worth {data['margin_loss']:.1f} pts "
                 f"(led by {top['player']}, {top['position']}, {top['status']})")
+        else:
+            reasons.append(f"{teams.display(abbr)} filed a clean injury report")
 
     if sigma_add > 1.0:
         reasons.append(f"Unresolved availability adds {sigma_add:.1f} pts of margin "
@@ -174,8 +202,14 @@ def adjust(game: Game, ratings: RatingSet, *,
     return ProjectionAdjustment(
         margin_shift=margin_shift, total_shift=total_shift, sigma_add=sigma_add,
         reasons=reasons,
-        detail={"home": {"team": game.home, **_public(home)},
-                "away": {"team": game.away, **_public(away)}},
+        detail={
+            "home": {"team": game.home, "known": home_known, **_public(home)},
+            "away": {"team": game.away, "known": away_known, **_public(away)},
+            "unknown_teams": unknown_teams,
+            "data_quality": (
+                "complete" if not unknown_teams else
+                f"no injury data for {', '.join(teams.display(t) for t in unknown_teams)}"),
+        },
     )
 
 
