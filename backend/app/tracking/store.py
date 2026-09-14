@@ -567,6 +567,24 @@ def mark_reconciled(position_id: str) -> None:
                      (time.time(), position_id))
 
 
+def _append_note(previous: Optional[str], addition: str) -> str:
+    """Notes accumulate; they never overwrite.
+
+    The note column is the audit trail. Replacing it on settlement destroyed the record of
+    a metadata correction made minutes earlier, which is exactly the history an audit trail
+    exists to keep.
+    """
+    previous = (previous or "").strip()
+    addition = (addition or "").strip()
+    if not addition:
+        return previous
+    if not previous:
+        return addition
+    if addition in previous:
+        return previous
+    return f"{previous} | {addition}"
+
+
 def _open_contracts(row: Any) -> int:
     """How many contracts are still held: filled minus already closed."""
     filled = row["filled_contracts"] if row["filled_contracts"] is not None else row["contracts"]
@@ -622,7 +640,8 @@ def close_position(position_id: str, *, exit_price: float, note: str = "",
         conn.execute(
             "UPDATE positions SET status=?, closed_at=?, exit_price=?, pnl=?, note=?, "
             "closed_contracts=?, exit_fees=? WHERE id=?",
-            (status, time.time(), exit_price, pnl, note or row["note"], now_closed,
+            (status, time.time(), exit_price, pnl,
+             _append_note(row["note"], note), now_closed,
              float(row["exit_fees"] or 0.0) + float(exit_fee or 0.0), position_id))
 
         updated = dict(row)
@@ -662,8 +681,8 @@ def settle_position(position_id: str, *, won: bool, note: str = "") -> Optional[
         conn.execute(
             "UPDATE positions SET status='settled', closed_at=?, settled_at=?, "
             "exit_price=?, pnl=?, note=?, closed_contracts=? WHERE id=?",
-            (time.time(), time.time(), value, pnl, note or row["note"], int(filled),
-             position_id))
+            (time.time(), time.time(), value, pnl,
+             _append_note(row["note"], note), int(filled), position_id))
         updated = dict(row)
         updated.update({"status": "settled", "exit_price": value, "pnl": pnl,
                         "contracts_settled": qty})

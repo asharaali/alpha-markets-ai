@@ -277,3 +277,81 @@ class TestSettlementUsesStoredMetadata:
         assert row["team"] == "KC"
         assert row["line"] == 3.5
         assert row["selection"] == "KC -3.5"
+
+
+class TestAuditTrailSurvivesCorrections:
+    """A note is a history, not a status line.
+
+    Settlement used to replace the note outright, which destroyed the record of a metadata
+    correction made minutes earlier — exactly the history an audit trail exists to keep.
+    """
+
+    def test_settlement_keeps_the_earlier_note(self):
+        position_id = store.open_position(
+            user="t", mode="paper", ticker="NFL-KC", side="yes", contracts=10,
+            entry_price=0.4, stake=4.0, filled_contracts=10, status="open",
+            note="2026-09-13: settlement metadata recovered from ticker")
+        store.settle_position(position_id, won=False, note="settled at game result")
+        row = store.positions_for("t")[0]
+        assert "metadata recovered" in row["note"]
+        assert "settled at game result" in row["note"]
+
+    def test_closing_keeps_the_earlier_note(self):
+        position_id = store.open_position(
+            user="t", mode="paper", ticker="NFL-KC", side="yes", contracts=10,
+            entry_price=0.4, stake=4.0, filled_contracts=10, status="open",
+            note="opened from recommendation abc123")
+        store.close_position(position_id, exit_price=0.5, note="closed at live book")
+        row = store.positions_for("t")[0]
+        assert "recommendation abc123" in row["note"]
+        assert "closed at live book" in row["note"]
+
+    def test_a_repeated_note_is_not_duplicated(self):
+        position_id = store.open_position(
+            user="t", mode="paper", ticker="NFL-KC", side="yes", contracts=10,
+            entry_price=0.4, stake=4.0, filled_contracts=10, status="open",
+            note="closed at live book")
+        store.close_position(position_id, exit_price=0.5, contracts=5,
+                             note="closed at live book")
+        store.close_position(position_id, exit_price=0.6, contracts=5,
+                             note="closed at live book")
+        row = store.positions_for("t")[0]
+        assert row["note"].count("closed at live book") == 1
+
+
+class TestBackfillRecoversMetadataWithoutGuessing:
+    def test_a_ticker_and_label_that_agree_are_repaired(self):
+        from app.tracking import backfill
+
+        rows = [{"id": "x", "ticker": "KXNFLTEAMTOTAL-26SEP09NESEA-NE25",
+                 "label": "Patriots over 24.5 points", "market_type": "team_total"}]
+        repairable, blocked = backfill.plan(rows)
+        assert not blocked
+        assert repairable[0]["team"] == "NE"
+        assert repairable[0]["line"] == pytest.approx(24.5)
+
+    def test_a_ticker_and_label_that_disagree_are_left_alone(self):
+        from app.tracking import backfill
+
+        rows = [{"id": "x", "ticker": "KXNFLTEAMTOTAL-26SEP09NESEA-NE25",
+                 "label": "Patriots over 27.5 points", "market_type": "team_total"}]
+        repairable, blocked = backfill.plan(rows)
+        assert not repairable
+        assert "disagree" in blocked[0]["reason"] or "says" in blocked[0]["reason"]
+
+    def test_an_unparseable_ticker_is_left_alone(self):
+        from app.tracking import backfill
+
+        rows = [{"id": "x", "ticker": "SOMETHING-ELSE", "label": "over 24.5",
+                 "market_type": "team_total"}]
+        repairable, blocked = backfill.plan(rows)
+        assert not repairable
+        assert blocked[0]["reason"] == "ticker does not parse"
+
+    def test_a_threshold_contract_maps_to_the_half_point_line(self):
+        from app.tracking import backfill
+
+        # Kalshi's "NE25" means 25 or more, which is the same market as "over 24.5".
+        parsed = backfill.parse_ticker("KXNFLTEAMTOTAL-26SEP09NESEA-NE25")
+        assert parsed["line"] == pytest.approx(24.5)
+        assert parsed["market_type"] == "team_total"
