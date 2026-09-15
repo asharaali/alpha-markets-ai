@@ -101,9 +101,14 @@ if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
+# The shell must be revalidated on every load. Served without this, browsers cached the
+# old World Cup page heuristically for days after the NFL deploy replaced it.
+_SHELL_HEADERS = {"Cache-Control": "no-cache"}
+
+
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=_SHELL_HEADERS)
 
 
 @app.get("/{path:path}", include_in_schema=False)
@@ -115,4 +120,4 @@ def spa(path: str):
     candidate = STATIC_DIR / path
     if candidate.is_file():
         return FileResponse(candidate)
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=_SHELL_HEADERS)
