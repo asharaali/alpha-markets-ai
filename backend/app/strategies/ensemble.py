@@ -130,9 +130,16 @@ def _weight_for(strategy: str, multipliers: Dict[str, float]) -> float:
 
 
 def _group_key(signal: Signal) -> str:
-    """Signals about the exact same tradeable side combine; nothing else does."""
-    ticker = signal.quote.ticker if signal.quote else "unpriced"
-    return f"{signal.game_id}|{ticker}|{signal.selection}"
+    """Signals about the exact same tradeable side combine; nothing else does.
+
+    A priced contract is identified by its ticker alone. Keying on the selection text too
+    split one contract in two whenever strategies worded it differently ("Over 48.5" from
+    totals, "Total over 48.5" from book consensus), so the board showed the same bet twice
+    and neither half had the other's evidence.
+    """
+    if signal.quote is not None:
+        return f"{signal.game_id}|{signal.quote.ticker}|{signal.quote.side.value}"
+    return f"{signal.game_id}|unpriced|{signal.selection}"
 
 
 def combine(signals: Sequence[Signal], *,
@@ -226,6 +233,12 @@ def _blend(members: List[Signal], multipliers: Dict[str, float]) -> Optional[Sig
         ],
         "disagreement": round(spread, 4),
         "member_count": len(members),
+        # The strategies' own numbers before each deferred to the price, weighted the same
+        # way. Without this "raw" and "final" on a card were the same figure.
+        "raw_model_prob": round(_sigmoid(sum(
+            w * _logit(float(s.features.get("raw_model_prob") or s.model_prob))
+            for w, s in zip(weights, members)) / total), 4) if len(weights) == len(members)
+            else None,
     })
     ensemble.confidence = _grade(ensemble, members, spread)
     return ensemble

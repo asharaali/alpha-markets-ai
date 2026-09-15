@@ -73,6 +73,39 @@ def normal_pdf(x: float, mu: float = 0.0, sigma: float = 1.0) -> float:
     return math.exp(-0.5 * z * z) / (sigma * SQRT2PI)
 
 
+# Around a MARKET line, margins are heavier-tailed and more peaked than a Normal: most games
+# land near the line and a minority are blowouts. A Normal of the same variance underrated
+# every favourite of four points or more on 4,175 games (2010-2025) — a 7-point favourite won
+# 74% of the time and the Normal said 69%. A Student-t with 7 degrees of freedom, scale 10.5
+# against a 13.1-point residual sigma, was chosen on 2010-2020 and scored better on 2021-2025
+# (win log loss 0.6107 vs 0.6126) with favourite win rates matching by spread bucket.
+#
+# Around OUR MODEL'S projection the Normal stays. The model's centre is noisier than a closing
+# line, and that extra error smooths the peak back out: on the held-out walk-forward the t
+# kernel made the model-only Brier worse (0.2471 -> 0.2486). Each kernel is used only where
+# it measured better.
+MARGIN_TAIL_DF = 7.0
+MARGIN_SCALE_RATIO = 10.5 / 13.12
+
+
+def student_t_pdf(x: float, df: float) -> float:
+    log_norm = (math.lgamma((df + 1.0) / 2.0) - math.lgamma(df / 2.0)
+                - 0.5 * math.log(df * math.pi))
+    return math.exp(log_norm - (df + 1.0) / 2.0 * math.log1p(x * x / df))
+
+
+def margin_pmf(k: int, mu: float, sigma: float) -> float:
+    """Mass on integer margin k under the heavy-tailed margin kernel (Simpson's rule)."""
+    if sigma <= 0:
+        return 1.0 if k == round(mu) else 0.0
+    scale = sigma * MARGIN_SCALE_RATIO
+    a, b = (k - 0.5 - mu) / scale, (k + 0.5 - mu) / scale
+    m = (a + b) / 2.0
+    return (b - a) / 6.0 * (student_t_pdf(a, MARGIN_TAIL_DF)
+                            + 4.0 * student_t_pdf(m, MARGIN_TAIL_DF)
+                            + student_t_pdf(b, MARGIN_TAIL_DF))
+
+
 def normal_pmf(k: int, mu: float, sigma: float) -> float:
     """Probability that a Normal rounds to the integer k (continuity-corrected)."""
     return normal_cdf(k + 0.5, mu, sigma) - normal_cdf(k - 0.5, mu, sigma)
@@ -149,7 +182,8 @@ def build_distribution(mu: float, sigma: float, *,
                        profile: Optional[KeyProfile] = None,
                        span: float = 5.0,
                        low: Optional[int] = None,
-                       high: Optional[int] = None) -> DiscreteDistribution:
+                       high: Optional[int] = None,
+                       kernel=None) -> DiscreteDistribution:
     """Discretised Normal(mu, sigma), reweighted by an empirical key-number profile.
 
     `span` is how many standard deviations of support to carry; 5 puts the truncated tail
@@ -161,7 +195,7 @@ def build_distribution(mu: float, sigma: float, *,
         lo, hi = hi, lo
     mass: List[float] = []
     for k in range(lo, hi + 1):
-        p = normal_pmf(k, mu, sigma)
+        p = (kernel or normal_pmf)(k, mu, sigma)
         if profile:
             p *= profile.get(k, 1.0)
         mass.append(p)
@@ -175,8 +209,18 @@ def build_distribution(mu: float, sigma: float, *,
 
 def margin_distribution(expected_margin: float, sigma: float,
                         profile: Optional[KeyProfile] = None) -> DiscreteDistribution:
-    """Home-team margin (home score minus away score)."""
+    """Home-team margin (home score minus away score) around a MODEL projection."""
     return build_distribution(expected_margin, sigma, profile=profile)
+
+
+def market_margin_distribution(line_margin: float, sigma: float,
+                               profile: Optional[KeyProfile] = None) -> DiscreteDistribution:
+    """Home-team margin centred on a MARKET line, on the heavy-tailed kernel.
+
+    `profile` must be the market key-number profile, which is fitted against this kernel.
+    """
+    return build_distribution(line_margin, sigma, profile=profile, span=7.0,
+                              kernel=margin_pmf)
 
 
 def total_distribution(expected_total: float, sigma: float,

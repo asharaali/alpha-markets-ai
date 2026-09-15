@@ -311,6 +311,8 @@ def complements(quotes: Sequence[MarketQuote]) -> Dict[str, List[MarketQuote]]:
 # rate limiter. Pricing the rungs nearest the projection covers everything we could
 # realistically bet and cuts the work by two thirds.
 LADDER_WINDOW = 7
+LIKELY_ZONE_OFFSET = 8.0
+LIKELY_ZONE_RUNGS = 2
 
 
 def select_for_pricing(discovered: Sequence[DiscoveredMarket],
@@ -353,7 +355,16 @@ def select_for_pricing(discovered: Sequence[DiscoveredMarket],
             continue
         centre = _ladder_centre(market_type, team, projection)
         rungs.sort(key=lambda m: abs((m.line or 0) - centre))
-        picked.extend(rungs[:window])
+        chosen = {m.ticker: m for m in rungs[:window]}
+        # The rungs nearest the projection are the coin flips. The likely outcomes sit about
+        # half a standard deviation either side: well below it YES is likely (a favourite
+        # covering a short line), well above it NO is likely (taking points, an under).
+        # Without these the board could only ever offer longshots and coin flips.
+        for offset in (-LIKELY_ZONE_OFFSET, LIKELY_ZONE_OFFSET):
+            target = centre + offset
+            for m in sorted(rungs, key=lambda m: abs((m.line or 0) - target))[:LIKELY_ZONE_RUNGS]:
+                chosen.setdefault(m.ticker, m)
+        picked.extend(chosen.values())
     return picked
 
 

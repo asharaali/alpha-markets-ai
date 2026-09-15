@@ -174,9 +174,12 @@ class TestLadderSelection:
         picked = km.select_for_pricing(
             rungs, {"G1": {"total": 44.0, "margin": 3.0, "home_score": 24, "away_score": 21,
                            "home_team": "SEA", "away_team": "NE"}}, window=5)
-        assert len(picked) == 5
+        assert len(picked) <= 5 + 2 * km.LIKELY_ZONE_RUNGS
         lines = sorted(m.line for m in picked)
-        assert lines[0] >= 35 and lines[-1] <= 53, f"kept {lines}, too far from 44"
+        # Coin flips near 44, plus the likely over/under zones about 8 points either side.
+        assert lines[0] >= 44 - km.LIKELY_ZONE_OFFSET - 3, f"kept {lines}"
+        assert lines[-1] <= 44 + km.LIKELY_ZONE_OFFSET + 3, f"kept {lines}"
+        assert 20 not in lines and 68 not in lines, "the far tails are still not read"
 
     def test_price_all_overrides_the_window(self):
         rungs = [self.market(MarketType.TOTAL, line) for line in range(20, 70, 3)]
@@ -188,4 +191,8 @@ class TestLadderSelection:
             rungs, {"G1": {"margin": 14.0, "total": 44.0, "home_score": 29, "away_score": 15,
                            "home_team": "SEA", "away_team": "NE"}}, window=3)
         lines = sorted(m.line for m in picked)
-        assert min(lines) >= 7 and max(lines) <= 22, f"kept {lines}, expected around 14"
+        assert min(lines) >= 14 - km.LIKELY_ZONE_OFFSET - 3, f"kept {lines}"
+        assert max(lines) <= 14 + km.LIKELY_ZONE_OFFSET + 3, f"kept {lines}"
+        assert any(line <= 7 for line in lines), (
+            "a short line the favourite very likely covers must be priced, or the board "
+            "can only offer coin flips and longshots")

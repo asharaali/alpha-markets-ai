@@ -93,7 +93,8 @@ class GameConsensus:
     def margin_distribution(self, profile: Optional[Dict[int, float]] = None):
         if self.margin is None:
             return None
-        return dist.margin_distribution(self.margin, DEFAULT_MARGIN_SIGMA, profile)
+        # Centred on the books' line, so the market kernel (see distributions).
+        return dist.market_margin_distribution(self.margin, DEFAULT_MARGIN_SIGMA, profile)
 
     def total_distribution(self, profile: Optional[Dict[int, float]] = None):
         if self.total is None:
@@ -136,13 +137,40 @@ def devig(a: Optional[float], b: Optional[float]) -> Optional[Tuple[float, float
     return pa / total, pb / total
 
 
-def _implied_centre(line: float, prob_over: float, sigma: float) -> Optional[float]:
+def _implied_centre(line: float, prob_over: float, sigma: float, *,
+                    margin: bool = False) -> Optional[float]:
     """Run a line backwards into the expectation that would produce it.
 
-    P(X > line) = p  =>  mu = line + sigma * z(p)
+    Totals: P(X > line) = p  =>  mu = line + sigma * z(p). Margins use the heavy-tailed
+    margin kernel the rest of the app prices with, inverted by bisection, so a book's -6.5
+    at 70% becomes the centre that reproduces 70% when it is read back at -6.5.
     """
     p = min(max(prob_over, 1e-4), 1 - 1e-4)
-    return line + sigma * dist.normal_ppf(p)
+    if not margin:
+        return line + sigma * dist.normal_ppf(p)
+    lo, hi = line - 6 * sigma, line + 6 * sigma
+    for _ in range(50):
+        mid = (lo + hi) / 2.0
+        # Continuous kernel: CDF of a half-point-shifted line avoids integer steps.
+        if 1.0 - _margin_cdf(line, mid, sigma) < p:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
+
+
+def _margin_cdf(x: float, mu: float, sigma: float, steps: int = 400) -> float:
+    """P(margin <= x) under the continuous margin kernel (Simpson over the t density)."""
+    scale = sigma * dist.MARGIN_SCALE_RATIO
+    z = (x - mu) / scale
+    a = -40.0
+    if z <= a:
+        return 0.0
+    h = (z - a) / steps
+    total = dist.student_t_pdf(a, dist.MARGIN_TAIL_DF) + dist.student_t_pdf(z, dist.MARGIN_TAIL_DF)
+    for i in range(1, steps):
+        total += (4 if i % 2 else 2) * dist.student_t_pdf(a + i * h, dist.MARGIN_TAIL_DF)
+    return total * h / 3.0
 
 
 async def _fetch() -> List[Dict[str, Any]]:
@@ -214,7 +242,8 @@ def _consensus_for(event: Dict[str, Any]) -> Optional[GameConsensus]:
                 # The book quotes the home team at `line` (negative when favoured); the
                 # home side covers when the margin exceeds -line.
                 threshold = -float(line)
-                centre = _implied_centre(threshold, pair[0], DEFAULT_MARGIN_SIGMA)
+                centre = _implied_centre(threshold, pair[0], DEFAULT_MARGIN_SIGMA,
+                                         margin=True)
                 if centre is not None:
                     margins.append(centre)
                     spread_lines.append(threshold)

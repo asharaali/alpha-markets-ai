@@ -52,6 +52,28 @@ class AsyncTTLCache:
         slot = self._slots.get(key)
         return slot.entry if slot else None
 
+    def put(self, key: str, value: Any) -> None:
+        """Store a value computed elsewhere, e.g. by a background job."""
+        self._slot(key).entry = Entry(value, time.time(), stale=False)
+
+    async def get_fast(self, key: str, loader: Callable[[], Awaitable[T]]) -> Entry:
+        """Stale-while-revalidate: an expired-but-usable value is returned immediately and
+        refreshed in the background. Only a cold cache makes the caller wait.
+
+        For slow loaders behind a page load. `get` makes whoever arrives just after the TTL
+        wait for the full rebuild, which for the slate is 40 seconds of blank dashboard.
+        """
+        slot = self._slot(key)
+        cur = slot.entry
+        now = time.time()
+        if cur is not None and (now - cur.fetched_at) < self.stale_ttl:
+            if (now - cur.fetched_at) >= self.ttl and not slot.lock.locked():
+                task = asyncio.create_task(self.get(key, loader))
+                _background.add(task)
+                task.add_done_callback(_finish_background)
+            return cur
+        return await self.get(key, loader)
+
     def invalidate(self, key: Optional[str] = None) -> None:
         if key is None:
             self._slots.clear()
@@ -101,6 +123,15 @@ class AsyncTTLCache:
                 log.error("%s[%s] refresh failed with no usable cache: %s",
                           self.name, key, exc)
                 raise
+
+
+_background: set = set()
+
+
+def _finish_background(task: "asyncio.Task") -> None:
+    _background.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        log.warning("background refresh failed: %s", task.exception())
 
 
 def _is_empty(value: Any) -> bool:

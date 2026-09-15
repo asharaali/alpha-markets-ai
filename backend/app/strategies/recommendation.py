@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.core.types import Confidence, MarketType, Signal
+from app.core.types import Confidence, MarketType, Side, Signal
 from app.risk import fees
 from app.strategies import pricing
 
@@ -88,6 +88,10 @@ class Recommendation:
     win_likelihood: str
     model_version: Optional[str] = None
     created_at: float = field(default_factory=time.time)
+    # Identifies the BET rather than the contract: every rung of "Browns by more than N" is
+    # the same opinion about the Browns, so the board shows one of them, not four.
+    bet_key: str = ""
+    breakdown: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -107,9 +111,9 @@ class Recommendation:
                 "edge": (round(self.final_prob - self.market_prob, 4)
                          if self.market_prob is not None else None),
                 "uncertainty": MODEL_UNCERTAINTY,
-                "note": ("Raw is the NFL model alone. Final is that shaded toward the "
-                         "market. The market column is the de-vigged price, which is what "
-                         "the edge is measured against."),
+                "note": ("Raw is the strategies' own estimate before deferring to the "
+                         "price. Final is that shaded toward the market, and is the number "
+                         "every other figure on this card uses."),
             },
             "price": {
                 "cost": round(self.cost, 4),
@@ -161,6 +165,7 @@ class Recommendation:
             },
             "model_version": self.model_version,
             "created_at": self.created_at,
+            "breakdown": self.breakdown,
         }
 
 
@@ -173,6 +178,14 @@ def settlement_text(signal: Signal) -> str:
     team = signal.team or ""
     line = signal.line
     market = signal.market_type
+    if signal.quote is not None and signal.quote.side is Side.NO and line is not None:
+        if market is MarketType.SPREAD:
+            return (f"Pays $1 unless {team} wins by MORE than {line:g} points. {team} "
+                    f"losing, or winning by {int(line)} or fewer, both pay.")
+        if market is MarketType.TOTAL:
+            return f"Pays $1 if the two teams combine for {int(line)} points or fewer."
+        if market is MarketType.TEAM_TOTAL:
+            return f"Pays $1 if {team} alone scores {int(line)} points or fewer."
 
     if market is MarketType.MONEYLINE:
         return (f"Pays $1 if {team} wins. A tie voids the contract and the stake is "
@@ -317,7 +330,7 @@ def build(signal: Signal, *, matchup: str, kickoff: Optional[str],
         selection=signal.selection,
         side=quote.side.value if quote.side else "yes",
         settlement=settlement_text(signal),
-        raw_model_prob=float(signal.model_prob),
+        raw_model_prob=float(signal.features.get("raw_model_prob") or signal.model_prob),
         final_prob=final_prob,
         market_prob=signal.market_prob,
         cost=cost,
@@ -341,6 +354,7 @@ def build(signal: Signal, *, matchup: str, kickoff: Optional[str],
         value_rating=value_rating(ev_net),
         win_likelihood=win_likelihood(final_prob),
         model_version=model_version,
+        bet_key=bet_key(signal),
     )
 
 
@@ -370,3 +384,64 @@ def empty_reason(considered: int, filtered: Dict[str, int]) -> str:
         f"Nothing on this board qualifies. Of {considered} priced contracts: {detail}. "
         "No qualifying bets is a normal result — most slates have no edge worth taking on "
         "liquid markets, and the thresholds are not lowered to fill this page.")
+
+
+def bet_key(signal: Signal) -> str:
+    """Same game, same market, same team, same direction: the same bet at a different line."""
+    side = signal.quote.side.value if signal.quote is not None else "yes"
+    return f"{signal.game_id}|{signal.market_type.value}|{signal.team or ''}|{side}"
+
+
+def profitable(recommendations: List[Recommendation]) -> List[Recommendation]:
+    """Only cards that make money after Kalshi's fee. A card that loses after fees is not a
+    marginal bet, it is a losing one, and it was being shown under 'qualifying bets'."""
+    return [r for r in recommendations
+            if r.ev_after_fees is not None and r.ev_after_fees > 0]
+
+
+def one_per_bet(recommendations: List[Recommendation]) -> List[Recommendation]:
+    """Keep the first card for each bet. Call on an already-ranked list."""
+    seen = set()
+    out: List[Recommendation] = []
+    for r in recommendations:
+        if r.bet_key in seen:
+            continue
+        seen.add(r.bet_key)
+        out.append(r)
+    return out
+
+
+# The high-win-rate lane. Likely enough to hit most weeks, and still not overpriced: the
+# probability we stand behind must at least cover the price plus Kalshi's fee. A 80% bet
+# at 82c is a likely winner and a losing bet, and it is refused here like anywhere else.
+HIGH_WIN_MIN_PROB = 0.65
+HIGH_WIN_MAX_PROB = 0.95        # beyond this the payout is pennies and one loss erases a month
+HIGH_WIN_MIN_DEPTH = 50.0
+
+
+def is_high_win_rate(r: Recommendation) -> bool:
+    if r.ev_after_fees is None or r.ev_after_fees < 0:
+        return False
+    if not (HIGH_WIN_MIN_PROB <= r.final_prob <= HIGH_WIN_MAX_PROB):
+        return False
+    # The market has to broadly agree this is likely. A "likely" bet the price calls a
+    # coin flip is the model's opinion, not a safe bet.
+    if r.market_prob is None or r.market_prob < HIGH_WIN_MIN_PROB - 0.05:
+        return False
+    return r.depth_usd >= HIGH_WIN_MIN_DEPTH
+
+
+def rank_high_win_rate(recommendations: List[Recommendation]) -> List[Recommendation]:
+    """Most likely first, value as the tie-break, one bet per game so a single upset cannot
+    take out the whole list."""
+    ordered = sorted((r for r in recommendations if is_high_win_rate(r)),
+                     key=lambda r: (round(r.final_prob, 2), r.ev_after_fees or 0.0),
+                     reverse=True)
+    seen_games = set()
+    out: List[Recommendation] = []
+    for r in ordered:
+        if r.game_id in seen_games:
+            continue
+        seen_games.add(r.game_id)
+        out.append(r)
+    return out

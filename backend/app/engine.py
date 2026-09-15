@@ -31,7 +31,8 @@ from app.features import players as player_features
 from app.models import calibration, game_model
 from app.models.ratings import RatingSet, build as build_ratings
 from app.strategies import (book_consensus, ensemble, game_lines, injury_impact,
-                            line_movement, matchup, mispricing, props, situational)
+                            line_movement, matchup, mispricing, pricing, props, sides,
+                            situational)
 from app.strategies.base import GameContext, ProjectionAdjustment
 
 log = get_logger(__name__)
@@ -61,9 +62,17 @@ class SlateAnalysis:
     built_at: float = field(default_factory=time.time)
     warnings: List[str] = field(default_factory=list)
     book_consensus: Dict[str, Any] = field(default_factory=dict)
+    # NO sides of spread/total/team-total contracts. Kept apart from `ensemble` because they
+    # are complements of it, not new forecasts: recording them would count every opinion
+    # twice in the track record, and the parlay engine prices YES legs only.
+    no_sides: Dict[str, List[Signal]] = field(default_factory=dict)
 
     def all_ensemble(self) -> List[Signal]:
         return [s for rows in self.ensemble.values() for s in rows]
+
+    def all_bets(self) -> List[Signal]:
+        """Every priced side a person could actually buy: YES and NO."""
+        return self.all_ensemble() + [s for rows in self.no_sides.values() for s in rows]
 
     def all_signals(self) -> List[Signal]:
         return [s for rows in self.signals.values() for s in rows]
@@ -185,7 +194,8 @@ def run_strategies(ctx: GameContext, artifact: calibration.GameModelArtifact,
     out.extend(matchup.signals(ctx, artifact))
     out.extend(line_movement.signals(ctx))
     if consensus is not None:
-        out.extend(book_consensus.signals(ctx, consensus, artifact.margin_profile()))
+        out.extend(book_consensus.signals(ctx, consensus, artifact.market_margin_profile(),
+                                          artifact.total_profile()))
     if include_props:
         out.extend(props.signals(ctx, name_index))
     return out
@@ -229,6 +239,13 @@ async def analyze(*, season: Optional[int] = None, week: Optional[int] = None,
     # Sportsbook consensus is an enhancement: consensus() never raises, and an empty result
     # simply means the cross-check does not run this cycle.
     consensus = await odds_api.consensus(slate)
+    if odds_api.configured() and not consensus:
+        remaining = odds_api.QUOTA.get("remaining")
+        warnings.append(
+            "The sportsbook cross-check is off this cycle"
+            + (f" — the Odds API key has {remaining} requests left" if remaining is not None
+               and remaining < 50 else "")
+            + ". Picks are checked against Kalshi only.")
 
     # Step 1: project every game before touching the venue.
     contexts: Dict[str, GameContext] = {}
@@ -268,6 +285,7 @@ async def analyze(*, season: Optional[int] = None, week: Optional[int] = None,
     signals: Dict[str, List[Signal]] = {}
     multipliers, _ = ensemble.performance_weights()
     ensembles: Dict[str, List[Signal]] = {}
+    no_sides: Dict[str, List[Signal]] = {}
 
     for game in slate:
         ctx = contexts[game.game_id]
@@ -276,12 +294,15 @@ async def analyze(*, season: Optional[int] = None, week: Optional[int] = None,
                               consensus=consensus.get(game.game_id))
         signals[game.game_id] = rows
         ensembles[game.game_id] = ensemble.combine(rows, multipliers=multipliers)
+        no_sides[game.game_id] = [m for m in (sides.no_side(s, game)
+                                              for s in ensembles[game.game_id]) if m]
 
     return SlateAnalysis(
         season=season, week=week, games=slate, contexts=contexts, signals=signals,
         ensemble=ensembles, quotes=quotes, board_stats=board_stats, ratings=ratings,
         model_summary=artifact.summary(), warnings=warnings,
         book_consensus={gid: row.to_dict() for gid, row in consensus.items()},
+        no_sides=no_sides,
     )
 
 
@@ -298,12 +319,19 @@ async def cached_analysis(*, include_props: bool = False,
     board honest without hammering the venue on every page load.
     """
     key = f"{season or 'cur'}:{week or 'cur'}:{int(include_props)}"
-    entry = await _analysis_cache.get(
+    entry = await _analysis_cache.get_fast(
         key, lambda: analyze(season=season, week=week, include_props=include_props))
-    if entry.stale:
-        entry.value.warnings.append(
-            "Showing the last successful analysis — the live refresh failed.")
+    note = "Showing the last successful analysis — the live refresh failed."
+    # The analysis object is shared across requests; appending on every stale read grew the
+    # list by one copy of this line per page view.
+    if entry.stale and note not in entry.value.warnings:
+        entry.value.warnings.append(note)
     return entry.value
+
+
+def remember_analysis(analysis: SlateAnalysis) -> None:
+    """Seed the page cache from a background run, so visitors never pay for the rebuild."""
+    _analysis_cache.put("cur:cur:0", analysis)
 
 
 async def game_analysis(game_id: str, *, include_props: bool = True) -> SlateAnalysis:
@@ -351,12 +379,25 @@ def best_opportunities(analysis: SlateAnalysis, *, limit: int = 15,
     order = {Confidence.REFERENCE: 0, Confidence.LOW: 1,
              Confidence.MEDIUM: 2, Confidence.HIGH: 3}
     floor = order[min_confidence]
-    picked = [s for s in analysis.all_ensemble()
+    picked = [s for s in analysis.all_bets()
               if s.features.get("value") and order.get(s.confidence, 0) >= floor
               and s.ev_per_dollar is not None]
     picked.sort(key=lambda s: (order.get(s.confidence, 0), s.ev_per_dollar or 0),
                 reverse=True)
     return picked[:limit]
+
+
+def likely_candidates(analysis: SlateAnalysis, *, min_prob: float = 0.6) -> List[Signal]:
+    """Liquid, recommendable sides we think are likely to win, before any price check.
+
+    Deliberately NOT gated on the value flag: that flag caps favourites, which is exactly
+    the population this lane is about. The price check happens on the built card instead,
+    after fees, where an overpriced favourite is refused.
+    """
+    return [s for s in analysis.all_bets()
+            if s.actionable and s.features.get("liquid")
+            and s.confidence is not Confidence.REFERENCE
+            and pricing.published_prob(s) >= min_prob]
 
 
 def prediction_rows(analysis: SlateAnalysis) -> List[Dict[str, Any]]:

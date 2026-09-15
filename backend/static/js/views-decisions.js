@@ -14,8 +14,9 @@ import {
   money, notice, num, panel, pct, relativeTime, setChildren, signedPct, stat, statRow,
 } from "./core.js?v=3";
 import {
-  healthPanel, modeBadge, openBetSlip, positionRow, recommendationCard, stateBadge,
-} from "./ui-decisions.js?v=3";
+  healthPanel, highWinCard, modeBadge, openBetSlip, positionRow, recommendationCard,
+  stateBadge,
+} from "./ui-decisions.js?v=4";
 
 /* ================================================================= OVERVIEW */
 
@@ -44,11 +45,15 @@ export async function overview(mount, { navigate, session }) {
     + "model alone is measurably worse. Treat every edge below as unproven and size "
     + "accordingly. See Performance for the full evaluation.", "warn"));
 
+  for (const w of opportunities.warnings || []) out.push(notice(w, "warn"));
+
   const live = portfolio?.live, paper = portfolio?.paper;
   out.push(statRow(
     stat("Week", `${health.week ?? "—"}`, `season ${health.season}`),
-    stat("Qualifying bets", String(opportunities.count),
-         opportunities.count ? "cleared the value gate" : "none today"),
+    stat("High win-rate", String(opportunities.high_win_rate_count || 0),
+         opportunities.high_win_rate_count ? "likely and fairly priced" : "none priced fairly"),
+    stat("Value bets", String(opportunities.count),
+         opportunities.count ? "profitable after fees" : "none today"),
     stat("Open exposure",
          money((live?.open_exposure || 0) + (paper?.open_exposure || 0)),
          live?.open_exposure ? `${money(live.open_exposure)} live` : "paper only"),
@@ -56,19 +61,28 @@ export async function overview(mount, { navigate, session }) {
          evClass(live?.realised_pnl)),
   ));
 
-  /* -------------------------------------------------- qualifying opportunities */
+  const review = (rec) => {
+    if (!session.user) return alert("Sign in to place or record a bet.");
+    openBetSlip(rec, { mode: "paper", onPlaced: () => navigate("#/bets") });
+  };
+
+  /* ---------------------------------------------------------- high win-rate bets */
+  const likely = opportunities.high_win_rate || [];
+  out.push(panel("High win-rate bets", { sub: opportunities.high_win_rate_basis },
+    likely.length
+      ? el("div", {}, ...likely.map((r) => highWinCard(r, { onSelect: review })))
+      : emptyState("Nothing likely is priced fairly", opportunities.high_win_rate_empty_reason
+          || "No likely bet currently makes money after fees.")));
+
+  /* -------------------------------------------------------------- value bets */
   const recs = opportunities.opportunities || [];
-  out.push(panel("This week's qualifying bets", {
-    sub: opportunities.ranking_basis,
+  out.push(panel("Value bets", {
+    sub: "Best price on the board — usually LESS likely to win, but paid well when it "
+       + "does. " + opportunities.ranking_basis,
   }, recs.length
-    ? el("div", {}, ...recs.map((r) => recommendationCard(r, {
-        onSelect: (rec) => {
-          if (!session.user) return alert("Sign in to place or record a bet.");
-          openBetSlip(rec, { mode: "paper", onPlaced: () => navigate("#/bets") });
-        },
-      })))
-    : emptyState("No qualifying bets", opportunities.empty_reason
-        || "Nothing on this board clears the value gate. That is a normal result.")));
+    ? el("div", {}, ...recs.map((r) => recommendationCard(r, { onSelect: review })))
+    : emptyState("No value bets", opportunities.empty_reason
+        || "Nothing on this board makes money after fees. That is a normal result.")));
 
   /* ------------------------------------------------------------- recent activity */
   if (portfolio) {

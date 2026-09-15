@@ -41,7 +41,7 @@ ARTIFACT_PATH = ARTIFACT_DIR / "game_model.json"
 
 # Artifact schema version. Bump when the predictor list changes so a stale file on a
 # deployed disk is refitted instead of silently mis-indexing coefficients.
-ARTIFACT_VERSION = 7
+ARTIFACT_VERSION = 9
 
 MARGIN_FEATURES = ["intercept", "epa_diff", "points_diff", "rest_diff",
                    "away_travel_k", "away_tz_shift", "div_game"]
@@ -78,6 +78,10 @@ class GameModelArtifact:
     # JSON object keys are strings; converted back to ints on load.
     margin_key_profile: Dict[str, float] = field(default_factory=dict)
     total_key_profile: Dict[str, float] = field(default_factory=dict)
+    # The margin profile refitted against the heavy-tailed kernel used for market-centred
+    # distributions (sportsbook consensus). A profile only corrects the kernel it was fitted
+    # against, so the two cannot share one.
+    market_margin_key_profile: Dict[str, float] = field(default_factory=dict)
     key_number_games: int = 0
     # Pre-shrinkage estimates and their t-statistics, kept so the Model Lab can show which
     # factors are genuinely supported instead of presenting every coefficient as fact.
@@ -90,6 +94,9 @@ class GameModelArtifact:
 
     def margin_profile(self) -> Dict[int, float]:
         return {int(k): v for k, v in self.margin_key_profile.items()}
+
+    def market_margin_profile(self) -> Dict[int, float]:
+        return {int(k): v for k, v in self.market_margin_key_profile.items()}
 
     def total_profile(self) -> Dict[int, float]:
         return {int(k): v for k, v in self.total_key_profile.items()}
@@ -211,7 +218,7 @@ async def fit_key_numbers(from_season: int = KEY_NUMBER_FROM_SEASON,
     if len(rows) < 500:
         log.warning("only %d games available for key-number fitting; skipping profiles",
                     len(rows))
-        return {}, {}, len(rows)
+        return {}, {}, len(rows), {}
 
     # Provisional spreads from the market itself, so the profile isolates the SHAPE of the
     # outcome distribution rather than our own model's bias.
@@ -220,15 +227,19 @@ async def fit_key_numbers(from_season: int = KEY_NUMBER_FROM_SEASON,
 
     margin_obs: Dict[int, float] = {}
     margin_exp: Dict[int, float] = {}
+    market_exp: Dict[int, float] = {}
     total_obs: Dict[int, float] = {}
     total_exp: Dict[int, float] = {}
 
     for g in rows:
         margin_obs[g.margin] = margin_obs.get(g.margin, 0.0) + 1.0
         total_obs[g.total_points] = total_obs.get(g.total_points, 0.0) + 1.0
-        for k in range(int(g.spread_line - 4 * margin_sigma),
-                       int(g.spread_line + 4 * margin_sigma) + 1):
+        for k in range(int(g.spread_line - 6 * margin_sigma),
+                       int(g.spread_line + 6 * margin_sigma) + 1):
+            # A profile corrects the kernel it is fitted against, so fit one per kernel.
             margin_exp[k] = margin_exp.get(k, 0.0) + dist.normal_pmf(k, g.spread_line,
+                                                                     margin_sigma)
+            market_exp[k] = market_exp.get(k, 0.0) + dist.margin_pmf(k, g.spread_line,
                                                                      margin_sigma)
         lo = max(0, int(g.total_line - 4 * total_sigma))
         for k in range(lo, int(g.total_line + 4 * total_sigma) + 1):
@@ -236,10 +247,11 @@ async def fit_key_numbers(from_season: int = KEY_NUMBER_FROM_SEASON,
                                                                    total_sigma)
 
     margin_profile = dist.fit_profile(margin_obs, margin_exp)
+    market_profile = dist.fit_profile(margin_obs, market_exp)
     total_profile = dist.fit_profile(total_obs, total_exp)
     log.info("key-number profiles fitted from %d games (margin sigma %.2f, total sigma %.2f)",
              len(rows), margin_sigma, total_sigma)
-    return margin_profile, total_profile, len(rows)
+    return margin_profile, total_profile, len(rows), market_profile
 
 
 def _correlation(a: Sequence[float], b: Sequence[float]) -> float:
@@ -352,7 +364,8 @@ async def fit(*, seasons: Optional[Sequence[int]] = None,
     margin_resid = [a - p for a, p in zip(margin_y, margin_pred)]
     total_resid = [a - p for a, p in zip(total_y, total_pred)]
 
-    m_profile, t_profile, key_games = await fit_key_numbers(before_season=before_season)
+    m_profile, t_profile, key_games, mm_profile = await fit_key_numbers(
+        before_season=before_season)
 
     artifact = GameModelArtifact(
         version=ARTIFACT_VERSION,
@@ -371,6 +384,7 @@ async def fit(*, seasons: Optional[Sequence[int]] = None,
         total_diagnostics=_diagnostics(TOTAL_FEATURES, total_fit, total_beta),
         margin_total_correlation=_correlation(margin_resid, total_resid),
         margin_key_profile={str(k): round(v, 5) for k, v in m_profile.items()},
+        market_margin_key_profile={str(k): round(v, 5) for k, v in mm_profile.items()},
         total_key_profile={str(k): round(v, 5) for k, v in t_profile.items()},
         key_number_games=key_games,
     )

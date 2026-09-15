@@ -4,7 +4,7 @@ import { api, el, relativeTime, pct } from "./core.js?v=3";
 import { games, gameDetail, predictions, markets } from "./views-research.js?v=3";
 import { strategies, modelLab, backtests } from "./views-model.js?v=3";
 import { portfolio, settings, applyTheme } from "./views-portfolio.js?v=3";
-import { overview, myBets, performance } from "./views-decisions.js?v=3";
+import { overview, myBets, performance } from "./views-decisions.js?v=4";
 import { parlays } from "./views-parlays.js?v=3";
 
 /* Navigation is organised around DECISIONS AND POSITIONS, not around subsystems.

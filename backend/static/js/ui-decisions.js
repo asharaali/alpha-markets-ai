@@ -15,7 +15,9 @@
  *     labelled rather than silently shown.
  */
 
-import { api, badge, cents, el, evClass, money, num, pct, signedPct } from "./core.js?v=3";
+import {
+  api, badge, cents, disclosure, el, evClass, money, num, pct, signedPct,
+} from "./core.js?v=3";
 
 /* ------------------------------------------------------------------- badges */
 
@@ -71,6 +73,50 @@ function cell(label, value, { sub, cls = "" } = {}) {
     sub ? el("div", { class: "sub", text: sub }) : null);
 }
 
+/** Why it wins, how it loses, and whether the price is fair — in words. */
+export function breakdownBlock(b) {
+  if (!b) return null;
+  const list = (title, items, cls) => items && items.length
+    ? el("div", { class: `bd-col ${cls}` },
+        el("div", { class: "bd-title", text: title }),
+        el("ul", {}, ...items.map((t) => el("li", { text: t }))))
+    : null;
+  return el("div", { class: "breakdown" },
+    el("div", { class: "bd-cols" },
+      list("Why it wins", b.why_it_wins, "win"),
+      list("How it loses", b.how_it_loses, "lose")),
+    el("p", { class: "bd-price", text: b.price_check }),
+    el("p", { class: "bd-verdict", text: b.verdict }));
+}
+
+/** A high-win-rate bet: the win chance leads, the analysis follows. */
+export function highWinCard(rec, { onSelect } = {}) {
+  const b = rec.breakdown || {};
+  const card = el("div", { class: `rec-card hw ${rec.assessment.robust ? "robust" : "fragile"}` });
+  card.append(el("div", { class: "rec-head" },
+    el("div", { class: "hw-prob" },
+      el("div", { class: "hw-pct", text: pct(rec.probability.final, 0) }),
+      el("div", { class: "hw-sub", text: b.loses_one_in
+        ? `loses ~1 in ${Math.round(b.loses_one_in)}` : "to win" })),
+    el("div", {},
+      el("div", { class: "rec-sel", text: rec.selection }),
+      el("div", { class: "rec-match", text: rec.matchup })),
+    el("div", { class: "spacer" }),
+    badge(`${cents(rec.price.cost)} to win $1`),
+    badge(`EV ${signedPct(rec.economics.ev_after_fees)}`,
+          rec.economics.ev_after_fees > 0 ? "pos" : "warn")));
+  const foot = el("div", { class: "rec-foot" });
+  foot.append(el("p", { class: "rec-why", text: rec.settles }));
+  foot.append(breakdownBlock(b));
+  if (onSelect) {
+    foot.append(el("div", { style: "margin-top:8px" },
+      el("button", { class: "btn sm primary", onClick: () => onSelect(rec),
+                     text: "Review bet" })));
+  }
+  card.append(foot);
+  return card;
+}
+
 /** One recommendation, stated completely enough to argue with. */
 export function recommendationCard(rec, { onSelect } = {}) {
   const p = rec.probability, price = rec.price, econ = rec.economics;
@@ -121,6 +167,9 @@ export function recommendationCard(rec, { onSelect } = {}) {
   }
   if (!robust) {
     foot.append(el("p", { class: "rec-missing", text: rec.assessment.robustness_note }));
+  }
+  if (rec.breakdown) {
+    foot.append(disclosure("Full breakdown", breakdownBlock(rec.breakdown)));
   }
   if (onSelect) {
     foot.append(el("div", { style: "margin-top:8px" },

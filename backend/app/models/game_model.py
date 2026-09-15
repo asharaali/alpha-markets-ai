@@ -187,7 +187,10 @@ def project(game: Game, rs: RatingSet, artifact: GameModelArtifact, *,
     expected_margin = base_margin + margin_shift
     expected_total = max(base_total + total_shift, 20.0)
 
-    margin_sigma = artifact.margin_sigma + max(extra_margin_sigma, 0.0)
+    # Independent uncertainty adds in quadrature. Adding it linearly turned the 2.8 points
+    # every game gets before injury reports are filed into 13.1 + 2.8 = 15.9 instead of
+    # 13.4, which flattened every favourite toward 50% and made every underdog look cheap.
+    margin_sigma = (artifact.margin_sigma ** 2 + max(extra_margin_sigma, 0.0) ** 2) ** 0.5
     total_sigma = artifact.total_sigma
 
     margin_dist = dist.margin_distribution(expected_margin, margin_sigma,

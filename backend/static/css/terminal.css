@@ -698,3 +698,18 @@ body { overflow-x: hidden; }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ---- high win-rate cards + breakdown ---- */
+.rec-card.hw .rec-head { align-items: center; gap: 14px; }
+.hw-prob { min-width: 64px; text-align: center; }
+.hw-pct { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--pos); line-height: 1; }
+.hw-sub { font-size: 10px; color: var(--text-dim); margin-top: 3px; }
+.breakdown { margin-top: 6px; }
+.bd-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.bd-title { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+.bd-col.win .bd-title { color: var(--pos); }
+.bd-col.lose .bd-title { color: var(--warn); }
+.bd-col ul { margin: 0; padding-left: 16px; color: var(--text-muted); line-height: 1.5; }
+.bd-price { margin: 8px 0 2px; font-family: var(--mono); font-size: 12px; }
+.bd-verdict { margin: 0; color: var(--text-muted); font-style: italic; }
+@media (max-width: 640px) { .bd-cols { grid-template-columns: 1fr; } }

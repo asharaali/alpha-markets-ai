@@ -18,7 +18,7 @@ import {
   api, badge, cents, disclosure, el, emptyState, errorState, evClass, loading,
   money, notice, num, panel, pct, setChildren, signedPct,
 } from "./core.js?v=3";
-import { modeBadge } from "./ui-decisions.js?v=3";
+import { modeBadge } from "./ui-decisions.js?v=4";
 
 function legRow(leg) {
   return el("div", { class: "health-row" },

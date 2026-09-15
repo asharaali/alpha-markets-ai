@@ -67,8 +67,14 @@ MIN_GAP = 0.02
 
 def consensus_probability(quote: MarketQuote, row: GameConsensus,
                           profile: Optional[Dict[int, float]],
-                          home: str) -> Optional[float]:
-    """What the sportsbook consensus says this exact Kalshi contract is worth."""
+                          home: str, *,
+                          total_profile: Optional[Dict[int, float]] = None) -> Optional[float]:
+    """What the sportsbook consensus says this exact Kalshi contract is worth.
+
+    `profile` is the MARGIN key-number profile and `total_profile` the totals one. They are
+    different objects: the margin profile spikes at 3 and 7, and applying it to a game total
+    read an even 43.5 as 44% over, which made every under on the board look underpriced.
+    """
     if quote.market_type is MarketType.MONEYLINE:
         if row.home_win_prob is None or quote.team is None:
             return None
@@ -84,7 +90,7 @@ def consensus_probability(quote: MarketQuote, row: GameConsensus,
         return margin.prob_under(-quote.line)
 
     if quote.market_type is MarketType.TOTAL and quote.line is not None:
-        total = row.total_distribution(profile)
+        total = row.total_distribution(total_profile)
         return total.prob_over(quote.line) if total else None
 
     if quote.market_type is MarketType.TEAM_TOTAL and quote.line is not None:
@@ -106,13 +112,15 @@ def usable(row: Optional[GameConsensus]) -> bool:
 
 
 def signals(ctx: GameContext, row: Optional[GameConsensus],
-            profile: Optional[Dict[int, float]]) -> List[Signal]:
+            profile: Optional[Dict[int, float]],
+            total_profile: Optional[Dict[int, float]] = None) -> List[Signal]:
     if not usable(row):
         return []
 
     out: List[Signal] = []
     for quote in ctx.quotes:
-        book_prob = consensus_probability(quote, row, profile, ctx.game.home)
+        book_prob = consensus_probability(quote, row, profile, ctx.game.home,
+                                          total_profile=total_profile)
         if book_prob is None:
             continue
         kalshi_prob = quote.implied_prob()

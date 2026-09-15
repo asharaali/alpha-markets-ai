@@ -30,22 +30,20 @@ async def parlays(category: Optional[str] = None,
 @router.get("/api/opportunities")
 async def opportunities(limit: int = Query(default=15, le=100),
                         request: Request = None):
-    """Ranked recommendations, each stated completely enough to be argued with.
+    """Two lists, answering two different questions.
 
-    Every card carries the raw model probability, the blended one, the market reference,
-    the executable price and its age, expected value AFTER fees, the break-even win rate,
-    available depth, the maximum price worth paying, what the model was not told, and
-    whether the edge survives a realistic model error.
+    `high_win_rate`: bets likely to win (65%+, and the market agrees) that are still priced
+    fairly after fees, one per game, each with a plain-language breakdown. A likely winner
+    at a losing price is refused here like anywhere else.
 
-    Ordering is by risk-adjusted value after fees, never by win probability or raw edge.
-    Sorting by edge promotes whatever the model is most wrong about; sorting by win
-    probability promotes heavy favourites, reliably the worst prices on the board.
+    `opportunities`: the best value on the board, which is often a less likely bet. Only
+    cards that make money after fees, and one line per bet rather than every ladder rung.
     """
     from app.data import teams
+    from app.strategies import explain
     from app.strategies import recommendation as rec
 
     analysis = await engine.cached_analysis()
-    picks = engine.best_opportunities(analysis, limit=limit)
     user = getattr(request.state, "user", None) if request else None
 
     if user:
@@ -54,8 +52,7 @@ async def opportunities(limit: int = Query(default=15, le=100),
     else:
         risk = exposure = None
 
-    cards: List[Dict[str, Any]] = []
-    for signal in picks:
+    def build_card(signal):
         context = analysis.contexts.get(signal.game_id)
         game = context.game if context else None
         sizing = (risk_bankroll.size_bet(signal, risk, exposure)
@@ -63,7 +60,7 @@ async def opportunities(limit: int = Query(default=15, le=100),
         missing = []
         if context is not None:
             missing = list(getattr(context, "missing_notes", None) or [])
-            if not context.injuries:
+            if not context.injuries or not any(context.injuries.values()):
                 missing.append(
                     "No injury report reached this game. Availability is unknown, not "
                     "assumed healthy.")
@@ -79,19 +76,38 @@ async def opportunities(limit: int = Query(default=15, le=100),
             missing=missing,
             model_version=getattr(analysis, "model_version", None))
         if card is not None:
-            cards.append(card)
+            card.breakdown = explain.breakdown(card, signal, context)
+        return card
 
-    ordered = rec.rank([c for c in cards])
+    # A wide pull, because filtering happens after fees on the built card.
+    value_cards = [c for c in (build_card(s) for s in
+                               engine.best_opportunities(analysis, limit=200)) if c]
+    ordered = rec.one_per_bet(rec.rank(rec.profitable(value_cards)))[:limit]
+
+    likely_cards = [c for c in (build_card(s) for s in engine.likely_candidates(analysis))
+                    if c]
+    high_win = rec.rank_high_win_rate(likely_cards)[:8]
+
     return {
         "season": analysis.season, "week": analysis.week,
+        "high_win_rate": [c.to_dict() for c in high_win],
+        "high_win_rate_count": len(high_win),
+        "high_win_rate_basis": (
+            f"Win probability {rec.HIGH_WIN_MIN_PROB:.0%}-{rec.HIGH_WIN_MAX_PROB:.0%}, the "
+            "market also rates it likely, and the price still makes money after Kalshi's "
+            "fee. One per game, most likely first."),
+        "high_win_rate_empty_reason": (None if high_win else (
+            "No likely bet is priced fairly right now. The favourites on this board cost "
+            "more than their chance of winning is worth, and paying that loses money "
+            "slowly. Check back after the injury reports land Wed-Fri, when prices move.")),
         "opportunities": [c.to_dict() for c in ordered],
         "count": len(ordered),
         "empty_reason": (None if ordered else rec.empty_reason(
-            len(analysis.signals) if hasattr(analysis, "signals") else 0, {})),
+            len(analysis.all_bets()), {})),
         "ranking_basis": (
             "Expected value after fees, tempered by hit probability, with edges that do "
-            "not survive a 3% model error ranked below those that do. NOT by win "
-            "probability and NOT by raw edge."),
+            "not survive a 3% model error ranked below those that do. One line per bet. "
+            "NOT by win probability and NOT by raw edge."),
         "warnings": analysis.warnings,
         "disclaimer": ("A model edge is an estimate, not a promise. Every one of these can "
                        "lose. Held-out evaluation shows this model does not beat closing "

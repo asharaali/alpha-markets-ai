@@ -92,6 +92,7 @@ async def _snapshot_once() -> Dict[str, Any]:
     from app.tracking import store
 
     analysis = await engine.analyze()
+    engine.remember_analysis(analysis)
     written = store.record_snapshots(analysis.quotes)
     predictions = store.record_predictions(engine.prediction_rows(analysis))
     predictions += store.record_predictions(engine.per_strategy_rows(analysis))
