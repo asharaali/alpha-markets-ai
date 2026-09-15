@@ -117,7 +117,10 @@ def spa(path: str):
     if path.startswith("api/"):
         return JSONResponse({"error": "not_found", "message": f"no endpoint /{path}"},
                             status_code=404)
-    candidate = STATIC_DIR / path
-    if candidate.is_file():
+    # Resolve before checking: "..%2F" decodes into the path, and without this the route
+    # served any file on the box — the database, the source, /proc/self/environ.
+    root = STATIC_DIR.resolve()
+    candidate = (STATIC_DIR / path).resolve()
+    if candidate.is_relative_to(root) and candidate.is_file():
         return FileResponse(candidate)
     return FileResponse(STATIC_DIR / "index.html", headers=_SHELL_HEADERS)
