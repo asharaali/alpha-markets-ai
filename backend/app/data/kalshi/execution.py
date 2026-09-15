@@ -602,6 +602,38 @@ async def close(*, username: str, position_id: str,
     }
 
 
+_balance_cache: Dict[str, Any] = {"at": 0.0, "value": None}
+
+
+async def live_balance(username: Optional[str]) -> Optional[float]:
+    """The live account's real Kalshi cash, cached 60s. None when not live or unreadable."""
+    allowed, _ = live_trading_available(username)
+    if not allowed:
+        return None
+    if time.time() - _balance_cache["at"] < 60 and _balance_cache["value"] is not None:
+        return _balance_cache["value"]
+    try:
+        value = (await kc.balance())["balance_usd"]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not read Kalshi balance: %s", exc)
+        return None
+    _balance_cache.update(at=time.time(), value=value)
+    return value
+
+
+async def live_risk(username: str):
+    """Risk settings for sizing, bounded by real Kalshi cash and the hard caps when live."""
+    from app.risk import bankroll as risk_bankroll
+    risk = risk_bankroll.RiskSettings.load(username)
+    allowed, _ = live_trading_available(username)
+    live = None
+    if allowed:
+        live = risk_bankroll.apply_live_balance(
+            risk, await live_balance(username),
+            hard_max_stake=settings.HARD_MAX_STAKE, hard_daily_cap=settings.HARD_DAILY_CAP)
+    return risk, live
+
+
 async def account_status(username: Optional[str]) -> Dict[str, Any]:
     """What execution modes are available, and why. Surfaced in Settings."""
     allowed, reason = live_trading_available(username)
@@ -617,6 +649,9 @@ async def account_status(username: Optional[str]) -> Dict[str, Any]:
     if kc.credentials_present():
         try:
             status["kalshi_balance"] = await kc.balance()
+            if allowed:
+                _balance_cache.update(at=time.time(),
+                                      value=status["kalshi_balance"]["balance_usd"])
         except Exception as exc:  # noqa: BLE001
             status["kalshi_balance_error"] = str(exc)[:180]
     return status

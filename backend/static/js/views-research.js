@@ -6,7 +6,7 @@ import {
   cents, kickoffLabel, relativeTime, evClass, get, setChildren,
 } from "./core.js?v=3";
 import { equityChart, distributionChart, movementChart, splitBar, rankBars } from "./charts.js?v=3";
-import { parlayCard } from "./views-portfolio.js?v=3";
+import { parlayCard } from "./views-portfolio.js?v=4";
 
 const teamAbbr = (g, side) => g?.[side] ?? "?";
 

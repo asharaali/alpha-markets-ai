@@ -47,7 +47,7 @@ async def opportunities(limit: int = Query(default=15, le=100),
     user = getattr(request.state, "user", None) if request else None
 
     if user:
-        risk = risk_bankroll.RiskSettings.load(user)
+        risk, _ = await execution.live_risk(user)
         exposure = risk_bankroll.current_exposure(user)
     else:
         risk = exposure = None
@@ -167,13 +167,15 @@ async def portfolio(request: Request):
                                    + float(p.get("exit_fees") or 0) for p in rows), 2),
         }
 
+    status = await execution.account_status(user)
+    risk, live = await execution.live_risk(user)
     return {
         "user": user,
-        "risk": risk_bankroll.portfolio(user),
+        "risk": risk_bankroll.portfolio(user, risk, live),
         "paper": summarise("paper"),
         "live": summarise("live"),
         "parlays": store.parlays_for(user),
-        "execution": await execution.account_status(user),
+        "execution": status,
         "status_legend": {
             "submitted": "sent to the venue, no fill confirmed yet",
             "partially_filled": "some contracts filled, the rest did not",
@@ -397,7 +399,8 @@ async def close_position(body: schemas.ClosePositionRequest, request: Request):
 @router.get("/api/bankroll")
 async def get_bankroll(request: Request):
     user = require_user(request)
-    return risk_bankroll.portfolio(user)
+    risk, live = await execution.live_risk(user)
+    return risk_bankroll.portfolio(user, risk, live)
 
 
 @router.post("/api/bankroll")
@@ -407,7 +410,8 @@ async def update_bankroll(body: schemas.BankrollRequest, request: Request):
               if v is not None and k not in ("starting", "current")}
     store.set_bankroll(user, starting=body.starting, current=body.current,
                        config=config or None)
-    return risk_bankroll.portfolio(user)
+    risk, live = await execution.live_risk(user)
+    return risk_bankroll.portfolio(user, risk, live)
 
 
 @router.get("/api/performance")

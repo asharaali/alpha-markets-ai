@@ -186,3 +186,22 @@ class TestPageCacheNeverBlocksOnAWarmValue:
             return first.value, cache.peek("k").value, len(calls)
 
         assert asyncio.run(run()) == ("old", "new", 1)
+
+
+class TestLiveSizingUsesRealCash:
+    def test_bankroll_is_capped_at_kalshi_balance_and_limits_at_hard_caps(self, monkeypatch):
+        from app.risk import bankroll as rb
+        risk = rb.RiskSettings(bankroll=1000.0, max_stake_pct=0.05, max_daily_pct=0.2)
+        live = rb.apply_live_balance(risk, 55.0, hard_max_stake=5.0, hard_daily_cap=20.0)
+        assert risk.bankroll == 55.0 and live["source"] == "Kalshi balance"
+        monkeypatch.setattr(rb, "current_exposure", lambda user: rb.Exposure())
+        monkeypatch.setattr(rb, "drawdown_report", lambda user: {})
+        out = rb.portfolio("u", risk, live)
+        assert out["limits"]["per_bet"] <= 5.0
+        assert out["limits"]["daily_remaining"] <= 20.0
+
+    def test_unreadable_balance_keeps_saved_bankroll(self):
+        from app.risk import bankroll as rb
+        risk = rb.RiskSettings(bankroll=40.0)
+        rb.apply_live_balance(risk, None, hard_max_stake=5.0, hard_daily_cap=20.0)
+        assert risk.bankroll == 40.0

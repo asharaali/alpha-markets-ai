@@ -148,7 +148,14 @@ export async function portfolio(mount, { navigate }) {
   mount.replaceChildren(frag(
     notice(risk.disclaimer, "warn"),
     statRow(
-      stat("Bankroll", money(risk.settings.bankroll), `${risk.settings.mode} sizing`),
+      risk.live && risk.live.kalshi_balance != null
+        ? stat("Kalshi balance", money(risk.live.kalshi_balance), "real cash, live", "pos")
+        : risk.live
+          ? stat("Kalshi balance", "—", "could not read — check the key", "warn")
+          : null,
+      stat("Sizing bankroll", money(risk.settings.bankroll),
+           risk.live ? `${risk.settings.mode} · capped at your Kalshi cash`
+                     : `${risk.settings.mode} sizing`),
       stat("At risk", money(risk.exposure.total), `${open.length} open`),
       stat("Today", money(risk.exposure.today),
            `${money(risk.limits.daily_remaining)} of daily budget left`),
@@ -182,7 +189,10 @@ export async function portfolio(mount, { navigate }) {
         : emptyState("No open positions",
             "Take a paper position from a prediction card and it will show up here.")),
 
-    panel("Exposure limits", { sub: "caps the interface will not let you exceed" },
+    panel("Exposure limits", { sub: risk.live
+        ? `includes the server's hard caps: ${money(risk.live.hard_max_stake)} per order, `
+          + `${money(risk.live.hard_daily_cap)} per day`
+        : "caps the interface will not let you exceed" },
       el("dl", { class: "kv" },
         el("dt", { text: "Per bet" }), el("dd", { text: money(risk.limits.per_bet) }),
         el("dt", { text: "Per game" }), el("dd", { text: money(risk.limits.per_game) }),

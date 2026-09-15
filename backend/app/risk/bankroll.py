@@ -257,19 +257,46 @@ def drawdown_report(user: str) -> Dict[str, Any]:
     }
 
 
-def portfolio(user: str) -> Dict[str, Any]:
+def apply_live_balance(risk: RiskSettings, balance_usd: Optional[float], *,
+                       hard_max_stake: float, hard_daily_cap: float) -> Dict[str, Any]:
+    """Size against money that exists.
+
+    For the live-trading account the bankroll was a $1,000 placeholder (DEFAULT_BANKROLL)
+    while the real Kalshi balance was fetched and never used, so per-bet limits and Kelly
+    stakes were computed from cash the account did not have. The sizing bankroll is now the
+    smaller of the saved figure and the real balance, and the per-bet and daily limits are
+    the smaller of the percentage caps and the server's hard caps.
+    """
+    info: Dict[str, Any] = {"kalshi_balance": balance_usd, "source": "saved setting"}
+    if balance_usd is not None:
+        if balance_usd < risk.bankroll:
+            risk.bankroll = balance_usd
+            info["source"] = "Kalshi balance"
+    info["hard_max_stake"] = hard_max_stake
+    info["hard_daily_cap"] = hard_daily_cap
+    return info
+
+
+def portfolio(user: str, risk: Optional[RiskSettings] = None,
+              live: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The full risk picture for the portfolio page."""
-    risk = RiskSettings.load(user)
+    risk = risk or RiskSettings.load(user)
     exposure = current_exposure(user)
     bankroll = max(risk.bankroll, 1e-9)
+    per_bet = bankroll * risk.max_stake_pct
+    daily_left = max(bankroll * risk.max_daily_pct - exposure.today, 0)
+    if live:
+        per_bet = min(per_bet, live["hard_max_stake"])
+        daily_left = min(daily_left, max(live["hard_daily_cap"] - exposure.today, 0))
     return {
         "settings": risk.to_dict(),
+        "live": live,
         "exposure": exposure.to_dict(),
         "limits": {
-            "per_bet": round(bankroll * risk.max_stake_pct, 2),
+            "per_bet": round(per_bet, 2),
             "per_game": round(bankroll * risk.max_per_game_pct, 2),
             "per_team": round(bankroll * risk.max_per_team_pct, 2),
-            "daily_remaining": round(max(bankroll * risk.max_daily_pct - exposure.today, 0), 2),
+            "daily_remaining": round(daily_left, 2),
         },
         "utilisation": {
             "total_pct": round(exposure.total / bankroll, 4),
