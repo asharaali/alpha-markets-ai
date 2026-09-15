@@ -16,7 +16,7 @@ import json
 import secrets
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.config import settings
 from app.core.errors import ValidationError
@@ -91,7 +91,7 @@ def get_user(username: str) -> Optional[dict]:
 
 def verify_user(username: str, password: str) -> bool:
     record = get_user(username)
-    if not record:
+    if not record or record["hash"] == DISABLED_HASH:
         # Hash anyway so a missing account and a wrong password take the same time.
         _hash(password or "", secrets.token_hex(16))
         return False
@@ -104,9 +104,65 @@ def all_usernames() -> List[str]:
             store.connection().execute("SELECT username FROM users").fetchall()]
 
 
+DISABLED_HASH = "disabled"
+
+# Failed logins per username: (count, first failure time). In memory on purpose — a restart
+# clearing it is fine; the point is to make online guessing slow, not to keep a ledger.
+_failures: Dict[str, Tuple[int, float]] = {}
+
+
+def locked_out(username: str) -> bool:
+    name = (username or "").strip().lower()
+    count, since = _failures.get(name, (0, 0.0))
+    if count and time.time() - since > settings.LOGIN_LOCKOUT_SECONDS:
+        _failures.pop(name, None)
+        return False
+    return count >= settings.LOGIN_MAX_FAILURES
+
+
+def record_login(username: str, ok: bool) -> None:
+    name = (username or "").strip().lower()
+    if ok:
+        _failures.pop(name, None)
+        return
+    count, since = _failures.get(name, (0, time.time()))
+    _failures[name] = (count + 1, since)
+
+
+def set_password(username: str, password: str) -> None:
+    """Replace a password. Every existing session for the account stops working."""
+    if len(password or "") < 8:
+        raise ValidationError("password must be at least 8 characters")
+    salt = secrets.token_hex(16)
+    with store.transaction() as conn:
+        cur = conn.execute("UPDATE users SET salt=?, hash=? WHERE username=?",
+                           (salt, _hash(password, salt), (username or "").strip().lower()))
+    if not cur.rowcount:
+        raise ValidationError(f"no account named {username}")
+    _failures.pop((username or "").strip().lower(), None)
+
+
+def disable_user(username: str) -> bool:
+    """Block an account from logging in and end its sessions. Its records are kept."""
+    with store.transaction() as conn:
+        cur = conn.execute("UPDATE users SET hash=? WHERE username=?",
+                           (DISABLED_HASH, (username or "").strip().lower()))
+    return bool(cur.rowcount)
+
+
+def _session_key(record: dict) -> bytes:
+    # Keyed on the stored hash as well as the site secret, so changing or disabling a
+    # password invalidates every cookie issued before it.
+    return hmac.new(_SECRET, record["hash"].encode(), hashlib.sha256).digest()
+
+
 def make_token(username: str) -> str:
-    payload = base64.urlsafe_b64encode(username.encode()).decode()
-    signature = hmac.new(_SECRET, payload.encode(), hashlib.sha256).hexdigest()
+    record = get_user(username)
+    if not record:
+        raise ValidationError(f"no account named {username}")
+    expires = int(time.time() + settings.SESSION_DAYS * 86400)
+    payload = base64.urlsafe_b64encode(f"{record['username']}|{expires}".encode()).decode()
+    signature = hmac.new(_session_key(record), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{signature}"
 
 
@@ -115,12 +171,16 @@ def read_token(token: Optional[str]) -> Optional[str]:
         return None
     try:
         payload, signature = token.split(".", 1)
-    except ValueError:
-        return None
-    expected = hmac.new(_SECRET, payload.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(signature, expected):
-        return None
-    try:
-        return base64.urlsafe_b64decode(payload).decode()
+        username, expires = base64.urlsafe_b64decode(payload).decode().rsplit("|", 1)
+        expires_at = int(expires)
     except (ValueError, UnicodeDecodeError):
         return None
+    if expires_at < time.time():
+        return None
+    record = get_user(username)
+    if not record or record["hash"] == DISABLED_HASH:
+        return None
+    expected = hmac.new(_session_key(record), payload.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+    return record["username"]

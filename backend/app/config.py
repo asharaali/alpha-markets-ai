@@ -135,7 +135,12 @@ class Settings:
 
     # ---------------- auth ----------------
     SITE_SECRET: str = ""        # resolved below
-    SESSION_DAYS: int = _int("SESSION_DAYS", 60)
+    SESSION_DAYS: int = _int("SESSION_DAYS", 30)
+    # Closed by default: this is one person's instance. Accounts are made with
+    # `python -m app.accounts create <name>` from a shell on the box.
+    ALLOW_SIGNUP: bool = _bool("ALLOW_SIGNUP", False)
+    LOGIN_MAX_FAILURES: int = _int("LOGIN_MAX_FAILURES", 5)
+    LOGIN_LOCKOUT_SECONDS: int = _int("LOGIN_LOCKOUT_SECONDS", 900)
 
 
 def _current_season() -> int:

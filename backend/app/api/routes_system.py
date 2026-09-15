@@ -24,6 +24,10 @@ STARTED_AT = time.time()
 
 @router.post("/api/signup")
 def signup(body: schemas.AuthRequest, request: Request):
+    if not settings.ALLOW_SIGNUP:
+        return JSONResponse({"error": "forbidden",
+                             "message": "Sign-ups are closed on this instance."},
+                            status_code=403)
     username, error = auth.create_user(body.username, body.password)
     if error:
         return JSONResponse({"error": "invalid_request", "message": error},
@@ -35,7 +39,13 @@ def signup(body: schemas.AuthRequest, request: Request):
 
 @router.post("/api/login")
 def login(body: schemas.AuthRequest, request: Request):
-    if not auth.verify_user(body.username, body.password):
+    if auth.locked_out(body.username):
+        return JSONResponse({"error": "locked",
+                             "message": "Too many failed attempts. Try again in 15 minutes."},
+                            status_code=429)
+    ok = auth.verify_user(body.username, body.password)
+    auth.record_login(body.username, ok)
+    if not ok:
         return JSONResponse({"error": "unauthorized",
                              "message": "wrong username or password"}, status_code=401)
     username = body.username.strip().lower()
