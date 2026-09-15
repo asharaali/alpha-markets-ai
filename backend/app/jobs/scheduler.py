@@ -11,13 +11,18 @@ there is no way to backfill it later.
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.core.logging import get_logger
 
 log = get_logger(__name__)
+
+_BACKEND_DIR = str(Path(__file__).resolve().parents[2])
+_FIT_COMMAND = [sys.executable, "-m", "app.jobs.fit_model"]
 
 _tasks: List[asyncio.Task] = []
 _status: Dict[str, Dict[str, Any]] = {}
@@ -58,19 +63,27 @@ async def _loop(name: str, interval: float, body) -> None:
 
 
 async def _calibrate_once() -> Dict[str, Any]:
-    """Fit the game model if it has not been fitted, on a worker thread.
+    """Fit the game model if it has not been fitted, in a separate process.
 
-    Fitting downloads several seasons of play-by-play and takes tens of seconds, so it must
-    not block the event loop while the app is serving requests.
+    Fitting downloads several seasons of play-by-play and takes tens of seconds of CPU. Run
+    on the event loop it starved /api/health past Render's 5-second check and the instance
+    was killed mid-fit, every restart. A thread would not do: the fit path shares async
+    caches whose locks belong to this loop.
     """
     from app.models import calibration
 
     if calibration.load() is not None:
         return {"status": "already calibrated"}
-    log.info("no game model artifact found — fitting in the background")
-    artifact = await calibration.fit()
-    return {"status": "fitted", "games": artifact.sample_games,
-            "seasons": artifact.seasons_fitted}
+    log.info("no game model artifact found — fitting in a background process")
+    proc = await asyncio.create_subprocess_exec(*_FIT_COMMAND, cwd=_BACKEND_DIR)
+    code = await proc.wait()
+    if code != 0:
+        raise RuntimeError(f"model fit process exited with status {code}")
+    artifact = calibration.load()
+    if artifact is None:
+        raise RuntimeError("model fit process finished without writing an artifact")
+    return {"status": "fitted", "games": getattr(artifact, "sample_games", None),
+            "seasons": getattr(artifact, "seasons_fitted", None)}
 
 
 async def _snapshot_once() -> Dict[str, Any]:
