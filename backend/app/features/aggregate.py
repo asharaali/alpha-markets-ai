@@ -11,6 +11,7 @@ weekly nflverse refresh invalidates automatically.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import asdict, dataclass, field
@@ -166,7 +167,9 @@ async def team_games(season: int, *, max_week: Optional[int] = None) -> List[Tea
             log.warning("aggregate cache for %s was unreadable; rebuilding", season)
 
     started = time.time()
-    rows = _reduce(path, season)
+    # Off the event loop: a season of play-by-play is seconds of parsing, and every
+    # season is re-reduced whenever its file is re-downloaded.
+    rows = await asyncio.to_thread(_reduce, path, season)
     cache.write_text(json.dumps({"stamp": stamp, "rows": [asdict(r) for r in rows]}))
     log.info("aggregated %s: %d team-games from play-by-play in %.1fs",
              season, len(rows), time.time() - started)

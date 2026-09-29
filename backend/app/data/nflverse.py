@@ -14,6 +14,7 @@ A season's files simply do not exist until that season starts, so every accessor
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
@@ -261,7 +262,9 @@ async def depth_charts(season: int) -> List[Dict[str, object]]:
     ident = (str(path), stat.st_mtime_ns, stat.st_size)
     memo = _depth_memo.get(season)
     if memo is None or memo[0] != ident:
-        memo = (ident, _parse_depth_chart(path))
+        # In a worker thread: ~580k rows of parsing held the event loop for seconds on
+        # the half-CPU host, long enough to miss a health check on the first refresh.
+        memo = (ident, await asyncio.to_thread(_parse_depth_chart, path))
         _depth_memo[season] = memo
     return [dict(r) for r in memo[1]]
 
