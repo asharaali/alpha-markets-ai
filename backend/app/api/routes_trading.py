@@ -418,14 +418,30 @@ async def update_bankroll(body: schemas.BankrollRequest, request: Request):
 async def performance(strategy: Optional[str] = None,
                       market_type: Optional[str] = None):
     """The live track record. Predictions were stored before outcomes and never edited."""
-    rows = store.settled_predictions(strategy=strategy, market_type=market_type)
+    from app.evaluation import protocol
+
+    # Collapsed to one row per forecast while streaming. Every scorecard below collapses
+    # refreshes anyway, and holding all ~150k raw rows (plus a point per refresh in the
+    # equity curve) was enough on its own to run the 512MB instance out of memory. It also
+    # stops the equity curve counting each hourly refresh of one forecast as another bet.
+    stream, raw = protocol.tally(store.iter_settled_predictions(
+        strategy, market_type=market_type,
+        columns=store.SCORING_COLUMNS + ("confidence",)),
+        ("strategy", "market_type", "confidence"))
+    rows = protocol.deduplicate(stream)
+    rows.sort(key=lambda r: r.get("created_at") or 0)
     pending = store.pending_predictions()
     counts = store.stats_snapshot()
     return {
-        "overall": metrics.summarise(rows, label="all predictions"),
-        "by_strategy": metrics.by_group(rows, "strategy"),
-        "by_market": metrics.by_group(rows, "market_type"),
-        "by_confidence": metrics.by_group(rows, "confidence"),
+        "overall": metrics.summarise(rows, label="all predictions",
+                                     raw_rows=raw["_all"]["_all"]),
+        "by_strategy": metrics.by_group(rows, "strategy", raw_counts=raw["strategy"]),
+        "by_market": metrics.by_group(rows, "market_type", raw_counts=raw["market_type"]),
+        "by_confidence": metrics.by_group(
+            protocol.deduplicate(store.iter_settled_predictions(
+                strategy, market_type=market_type,
+                columns=store.SCORING_COLUMNS + ("confidence",)), within="confidence"),
+            "confidence", raw_counts=raw["confidence"]),
         "equity_curve": metrics.equity_curve(rows),
         "pending_predictions": len(pending),
         "counts": counts,

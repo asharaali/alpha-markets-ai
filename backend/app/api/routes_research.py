@@ -253,7 +253,12 @@ async def strategies():
     """Every strategy's methodology, inputs, limitations and measured record."""
     from app.tracking import metrics
 
-    settled = store.settled_predictions()
+    from app.evaluation import protocol
+
+    # summarise() collapses refreshes per strategy anyway; doing it while streaming keeps
+    # memory bounded by distinct forecasts instead of every hourly refresh.
+    stream, raw = protocol.tally(store.iter_settled_predictions(), ("strategy",))
+    settled = protocol.deduplicate(stream)
     by_strategy = {row["strategy"]: [] for row in settled}
     for row in settled:
         by_strategy[row["strategy"]].append(row)
@@ -267,7 +272,8 @@ async def strategies():
                 "inputs": meta.inputs,
                 "limitations": meta.limitations,
                 "record": metrics.summarise(by_strategy.get(meta.key, []),
-                                            label=meta.key),
+                                            label=meta.key,
+                                            raw_rows=raw["strategy"].get(meta.key)),
             }
             for meta in STRATEGY_META
         ],

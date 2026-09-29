@@ -29,8 +29,9 @@ sets, and averaging them hides which one the model is actually good at.
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 # Hours before kickoff at which a forecast is scored. A prediction is assigned to the
 # nearest checkpoint at or after it, so each game contributes at most one row per
@@ -129,8 +130,9 @@ def cluster_key(row: Dict[str, Any]) -> str:
     return str(row.get("game_id") or "")
 
 
-def deduplicate(rows: Sequence[Dict[str, Any]], *,
-                checkpoint: Optional[float] = None) -> List[Dict[str, Any]]:
+def deduplicate(rows: Iterable[Dict[str, Any]], *,
+                checkpoint: Optional[float] = None,
+                within: Optional[str] = None) -> List[Dict[str, Any]]:
     """Collapse repeated refreshes of the same forecast to one row.
 
     Which row survives is not arbitrary. For a checkpoint C hours before kickoff, only
@@ -144,6 +146,10 @@ def deduplicate(rows: Sequence[Dict[str, Any]], *,
 
     This is the single largest correction in the evaluation. Without it the live
     performance page was reporting 4,077 observations drawn from 16 games.
+
+    `within` keeps one survivor per value of that field instead of one overall. Grouping
+    raw rows by a field that can change between refreshes (confidence) and collapsing each
+    group is not the same as collapsing first; this reproduces the former while streaming.
     """
     best: Dict[str, Dict[str, Any]] = {}
     for row in rows:
@@ -152,6 +158,8 @@ def deduplicate(rows: Sequence[Dict[str, Any]], *,
             if hours is None or float(hours) < checkpoint:
                 continue
         key = forecast_key(row)
+        if within:
+            key = f"{key}|{row.get(within)}"
         current = best.get(key)
         if current is None:
             best[key] = row
@@ -159,6 +167,25 @@ def deduplicate(rows: Sequence[Dict[str, Any]], *,
         if _ordering(row) > _ordering(current):
             best[key] = row
     return list(best.values())
+
+
+def tally(rows: Iterable[Dict[str, Any]], fields: Sequence[str]
+          ) -> Tuple[Iterator[Dict[str, Any]], Dict[str, Counter]]:
+    """Pass rows through while counting them per value of each field.
+
+    Lets a caller collapse refreshes while streaming and still report how many raw rows
+    were collapsed. The counters are complete once the returned iterator is exhausted.
+    """
+    counts: Dict[str, Counter] = {f: Counter() for f in fields}
+    counts["_all"] = Counter()
+
+    def _gen() -> Iterator[Dict[str, Any]]:
+        for row in rows:
+            counts["_all"]["_all"] += 1
+            for f in fields:
+                counts[f][row.get(f)] += 1
+            yield row
+    return _gen(), counts
 
 
 def _ordering(row: Dict[str, Any]) -> float:

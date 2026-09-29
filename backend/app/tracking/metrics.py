@@ -175,7 +175,8 @@ def equity_curve(predictions: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def summarise(predictions: Sequence[Dict[str, Any]], *,
               label: str = "all", collapse_refreshes: bool = True,
-              checkpoint: Optional[float] = None) -> Dict[str, Any]:
+              checkpoint: Optional[float] = None,
+              raw_rows: Optional[int] = None) -> Dict[str, Any]:
     """The full scorecard for a set of settled predictions.
 
     Every model probability is scored against the market probability recorded at the same
@@ -195,7 +196,8 @@ def summarise(predictions: Sequence[Dict[str, Any]], *,
     from app.evaluation import protocol
 
     settled = [p for p in predictions if p.get("outcome") is not None]
-    raw_rows = len(settled)
+    # Callers that collapsed refreshes while streaming pass the pre-collapse count.
+    raw_rows = max(raw_rows or 0, len(settled))
     if collapse_refreshes and settled:
         settled = protocol.deduplicate(settled, checkpoint=checkpoint)
     n = len(settled)
@@ -268,11 +270,14 @@ def _round(value: Optional[float], places: int = 4) -> Optional[float]:
     return round(value, places) if value is not None else None
 
 
-def by_group(predictions: Sequence[Dict[str, Any]], key: str) -> List[Dict[str, Any]]:
+def by_group(predictions: Sequence[Dict[str, Any]], key: str, *,
+             raw_counts: Optional[Dict[Any, int]] = None) -> List[Dict[str, Any]]:
     """Scorecards split by strategy, market type, or confidence level."""
     groups: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
     for row in predictions:
         groups[row.get(key)].append(row)
-    out = [summarise(rows, label=str(name)) for name, rows in groups.items()]
+    out = [summarise(rows, label=str(name),
+                     raw_rows=(raw_counts or {}).get(name))
+           for name, rows in groups.items()]
     out.sort(key=lambda s: s["n"], reverse=True)
     return out

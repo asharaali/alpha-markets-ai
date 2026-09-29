@@ -426,7 +426,8 @@ def void_prediction(prediction_id: str, reason: str = "") -> None:
 
 def settled_predictions(*, strategy: Optional[str] = None,
                         market_type: Optional[str] = None,
-                        since: Optional[float] = None) -> List[Dict[str, Any]]:
+                        since: Optional[float] = None,
+                        columns: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
     init()
     clauses = ["status='settled'", "outcome IS NOT NULL"]
     params: List[Any] = []
@@ -439,8 +440,48 @@ def settled_predictions(*, strategy: Optional[str] = None,
     if since:
         clauses.append("created_at >= ?")
         params.append(since)
-    sql = f"SELECT * FROM predictions WHERE {' AND '.join(clauses)} ORDER BY created_at"
+    cols = ", ".join(columns) if columns else "*"
+    sql = f"SELECT {cols} FROM predictions WHERE {' AND '.join(clauses)} ORDER BY created_at"
     return _rows(connection().execute(sql, params))
+
+
+# What scoring a strategy needs. `reasoning` and the display columns are most of a row's
+# size, and a full SELECT * over every settled row is what pushed the 512MB instance over.
+SCORING_COLUMNS = ("game_id", "strategy", "market_type", "selection", "created_at",
+                   "settled_at", "horizon_hours", "outcome", "model_prob", "fair_prob",
+                   "market_prob", "cost", "ev_per_dollar", "clv")
+
+
+def settled_strategies() -> List[str]:
+    init()
+    return [r[0] for r in connection().execute(
+        "SELECT DISTINCT strategy FROM predictions "
+        "WHERE status='settled' AND outcome IS NOT NULL")]
+
+
+def iter_settled_predictions(strategy: Optional[str] = None, *,
+                             market_type: Optional[str] = None,
+                             columns: Sequence[str] = SCORING_COLUMNS
+                             ) -> Iterator[Dict[str, Any]]:
+    """Stream settled rows, chosen columns only, oldest first.
+
+    For callers that collapse refreshes as they go: materialising every row first is what
+    ran the 512MB instance out of memory.
+    """
+    init()
+    clauses = ["status='settled'", "outcome IS NOT NULL"]
+    params: List[Any] = []
+    if strategy:
+        clauses.append("strategy=?")
+        params.append(strategy)
+    if market_type:
+        clauses.append("market_type=?")
+        params.append(market_type)
+    cursor = connection().execute(
+        f"SELECT {', '.join(columns)} FROM predictions "
+        f"WHERE {' AND '.join(clauses)} ORDER BY created_at", params)
+    for row in cursor:
+        yield dict(row)
 
 
 def predictions_for_game(game_id: str, limit: int = 500) -> List[Dict[str, Any]]:

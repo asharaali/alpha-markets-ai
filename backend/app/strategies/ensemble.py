@@ -21,6 +21,7 @@ So the combination is:
 from __future__ import annotations
 
 import math
+import time
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -88,37 +89,60 @@ def _sigmoid(x: float) -> float:
     return z / (1.0 + z)
 
 
+def _collapsed_record(strategy: str) -> Tuple[int, List[Dict[str, Any]]]:
+    """(raw settled row count, rows collapsed to one per forecast) for one strategy.
+
+    Collapses while streaming, so memory is bounded by distinct forecasts rather than by
+    every hourly refresh ever written.
+    """
+    from app.evaluation import protocol
+
+    stream, raw = protocol.tally(store.iter_settled_predictions(strategy), ())
+    rows = protocol.deduplicate(stream)
+    return raw["_all"]["_all"], rows
+
+
+# Weights only move when grading settles something (every 30 min), but analyze() asks for
+# them on every refresh. Recomputing from the whole history each time was pure churn.
+_WEIGHTS_TTL = 600.0
+_weights_cache: Optional[Tuple[float, Tuple[Dict[str, float], Dict[str, Any]]]] = None
+
+
 def performance_weights() -> Tuple[Dict[str, float], Dict[str, Any]]:
     """Weight multipliers earned from each strategy's measured record against the market."""
-    multipliers: Dict[str, float] = {}
-    detail: Dict[str, Any] = {}
+    global _weights_cache
+    if _weights_cache is not None and time.time() - _weights_cache[0] < _WEIGHTS_TTL:
+        return _weights_cache[1]
     try:
-        settled = store.settled_predictions()
+        result = _performance_weights()
     except Exception as exc:  # noqa: BLE001 - the ensemble must survive a database problem
         log.warning("could not read settled predictions for weighting: %s", exc)
         return {}, {"available": False, "reason": str(exc)[:120]}
+    _weights_cache = (time.time(), result)
+    return result
 
-    grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for row in settled:
-        grouped[row["strategy"]].append(row)
 
-    for strategy, rows in grouped.items():
-        if len(rows) < MIN_SETTLED_FOR_WEIGHTING:
-            detail[strategy] = {"n": len(rows), "weighted": False,
+def _performance_weights() -> Tuple[Dict[str, float], Dict[str, Any]]:
+    multipliers: Dict[str, float] = {}
+    detail: Dict[str, Any] = {}
+    for strategy in store.settled_strategies():
+        n_raw, rows = _collapsed_record(strategy)
+        if n_raw < MIN_SETTLED_FOR_WEIGHTING:
+            detail[strategy] = {"n": n_raw, "weighted": False,
                                 "reason": "not enough settled predictions yet"}
             continue
-        score = metrics.summarise(rows, label=strategy)
+        score = metrics.summarise(rows, label=strategy, collapse_refreshes=False)
         model_ll = score.get("log_loss")
         market_ll = score.get("log_loss_market")
         if not model_ll or not market_ll:
-            detail[strategy] = {"n": len(rows), "weighted": False,
+            detail[strategy] = {"n": n_raw, "weighted": False,
                                 "reason": "no market benchmark recorded"}
             continue
         # Beating the market's log loss earns weight; losing to it costs weight.
         ratio = market_ll / model_ll if model_ll > 0 else 1.0
         multiplier = min(max(ratio, 1.0 / MAX_WEIGHT_MULTIPLIER), MAX_WEIGHT_MULTIPLIER)
         multipliers[strategy] = multiplier
-        detail[strategy] = {"n": len(rows), "weighted": True,
+        detail[strategy] = {"n": n_raw, "weighted": True,
                             "log_loss": model_ll, "log_loss_market": market_ll,
                             "multiplier": round(multiplier, 3)}
     return multipliers, {"available": True, "strategies": detail,

@@ -252,11 +252,22 @@ async def depth_charts(season: int) -> List[Dict[str, object]]:
                             required=False)
     if path is None:
         return []
+    # Keep only the most recent snapshot: the file is append-only across the season, and
+    # ranking a player off a stale chart is how a benched backup becomes "the starter".
+    # Filtered while streaming because the file is ~50MB by week 3 and grows daily; holding
+    # every historical row as dicts before filtering was blowing the 512MB instance.
     rows: List[Dict[str, object]] = []
+    latest = ""
     for r in cs.stream(path, _DEPTH_COLS):
         team = teams.resolve(r.get("team"))
         if not team:
             continue
+        asof = str(cs.text(r.get("dt")) or "")
+        if asof < latest:
+            continue
+        if asof > latest:
+            latest = asof
+            rows = []
         rows.append({
             "asof": cs.text(r.get("dt")), "team": team,
             "player": cs.text(r.get("player_name")),
@@ -266,11 +277,6 @@ async def depth_charts(season: int) -> List[Dict[str, object]]:
             "position_name": cs.text(r.get("pos_name")),
             "rank": cs.integer(r.get("pos_rank")),
         })
-    # Keep only the most recent snapshot: the file is append-only across the season, and
-    # ranking a player off a stale chart is how a benched backup becomes "the starter".
-    latest = max((str(r["asof"] or "") for r in rows), default="")
-    if latest:
-        rows = [r for r in rows if r["asof"] == latest]
     return rows
 
 
