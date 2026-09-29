@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Sequence
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 from app.config import settings
 from app.core.logging import get_logger
@@ -245,6 +245,11 @@ _DEPTH_COLS = ["dt", "team", "player_name", "gsis_id", "pos_grp", "pos_name",
                "pos_abb", "pos_rank"]
 
 
+# Parsed latest-snapshot rows, keyed on the cached file's identity. Re-parsing ~580k rows
+# every board refresh when the file had not changed cost seconds of blocked event loop.
+_depth_memo: Dict[int, Tuple[Tuple[str, int, int], List[Dict[str, object]]]] = {}
+
+
 async def depth_charts(season: int) -> List[Dict[str, object]]:
     """Latest published depth chart rows. Used to know WHO is expected to play a role."""
     path = await fetch_file(_url("depth_charts", f"depth_charts_{season}.csv"),
@@ -252,6 +257,16 @@ async def depth_charts(season: int) -> List[Dict[str, object]]:
                             required=False)
     if path is None:
         return []
+    stat = path.stat()
+    ident = (str(path), stat.st_mtime_ns, stat.st_size)
+    memo = _depth_memo.get(season)
+    if memo is None or memo[0] != ident:
+        memo = (ident, _parse_depth_chart(path))
+        _depth_memo[season] = memo
+    return [dict(r) for r in memo[1]]
+
+
+def _parse_depth_chart(path: Path) -> List[Dict[str, object]]:
     # Keep only the most recent snapshot: the file is append-only across the season, and
     # ranking a player off a stale chart is how a benched backup becomes "the starter".
     # Filtered while streaming because the file is ~50MB by week 3 and grows daily; holding

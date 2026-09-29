@@ -94,6 +94,28 @@ def student_t_pdf(x: float, df: float) -> float:
     return math.exp(log_norm - (df + 1.0) / 2.0 * math.log1p(x * x / df))
 
 
+def student_t_cdf(x: float, df: float) -> Optional[float]:
+    """Exact Student-t CDF for odd integer df (closed form); None for any other df.
+
+    Replaces numerical integration on the hot path: inverting book lines called a
+    400-step Simpson integral inside a 50-step bisection, ~3M density evaluations per
+    board refresh, which froze the half-CPU host long enough to fail health checks.
+    """
+    n = int(df)
+    if n != df or n < 1 or n % 2 == 0:
+        return None
+    theta = math.atan(x / math.sqrt(df))
+    if n == 1:
+        return 0.5 + theta / math.pi
+    cos2 = math.cos(theta) ** 2
+    series, term = 0.0, 1.0
+    for k in range((n - 3) // 2 + 1):
+        if k:
+            term *= 2 * k / (2 * k + 1)
+        series += term * cos2 ** k
+    return 0.5 + (theta + math.sin(theta) * math.cos(theta) * series) / math.pi
+
+
 def margin_pmf(k: int, mu: float, sigma: float) -> float:
     """Mass on integer margin k under the heavy-tailed margin kernel (Simpson's rule)."""
     if sigma <= 0:

@@ -163,6 +163,9 @@ def _margin_cdf(x: float, mu: float, sigma: float, steps: int = 400) -> float:
     """P(margin <= x) under the continuous margin kernel (Simpson over the t density)."""
     scale = sigma * dist.MARGIN_SCALE_RATIO
     z = (x - mu) / scale
+    exact = dist.student_t_cdf(z, dist.MARGIN_TAIL_DF)
+    if exact is not None:
+        return exact
     a = -40.0
     if z <= a:
         return 0.0
