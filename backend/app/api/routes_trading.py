@@ -118,7 +118,7 @@ async def opportunities(limit: int = Query(default=15, le=100),
 @router.get("/api/evaluation")
 async def evaluation(seasons: Optional[str] = None):
     """The chronological walk-forward evaluation: baselines, ablations, and a verdict."""
-    from app.evaluation import report as evaluation_report
+    from app.jobs import research
 
     if seasons:
         wanted = [int(s) for s in seasons.split(",") if s.strip().isdigit()]
@@ -128,7 +128,7 @@ async def evaluation(seasons: Optional[str] = None):
     wanted = [s for s in wanted if s >= 1999]
     if len(wanted) < 3:
         raise ValidationError("at least three seasons are needed for a chronological split")
-    return await evaluation_report.run(seasons=wanted)
+    return await research.run("evaluation", seasons=wanted)
 
 
 # Which statuses mean "I still hold something". Named once so the portfolio, the risk
@@ -461,18 +461,20 @@ async def performance(strategy: Optional[str] = None,
 @router.post("/api/backtest")
 async def run_backtest(body: schemas.BacktestRequest):
     """Walk-forward backtest against closing sportsbook lines."""
-    from app.backtest import engine as backtest_engine
+    from app.jobs import research
 
     if any(s < 1999 or s > settings.SEASON for s in body.seasons):
         raise ValidationError("seasons must be between 1999 and the current season")
-    return await backtest_engine.run(seasons=body.seasons, start_week=body.start_week,
-                                     markets=body.markets, blend_weight=body.blend_weight)
+    return await research.run("backtest", seasons=list(body.seasons),
+                              start_week=body.start_week,
+                              markets=list(body.markets) if body.markets else None,
+                              blend_weight=body.blend_weight)
 
 
 @router.get("/api/backtest/default")
 async def default_backtest():
     """The standing backtest shown on the Backtests page, over recent seasons."""
-    from app.backtest import engine as backtest_engine
+    from app.jobs import research
 
     seasons = [settings.SEASON - 3, settings.SEASON - 2, settings.SEASON - 1]
-    return await backtest_engine.run(seasons=[s for s in seasons if s >= 1999])
+    return await research.run("backtest", seasons=[s for s in seasons if s >= 1999])
