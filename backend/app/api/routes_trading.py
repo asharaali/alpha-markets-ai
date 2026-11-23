@@ -27,24 +27,12 @@ async def parlays(category: Optional[str] = None,
     return await engine.parlays(include_props=include_props, category=category)
 
 
-@router.get("/api/opportunities")
-async def opportunities(limit: int = Query(default=15, le=100),
-                        request: Request = None):
-    """Two lists, answering two different questions.
-
-    `high_win_rate`: bets likely to win (65%+, and the market agrees) that are still priced
-    fairly after fees, one per game, each with a plain-language breakdown. A likely winner
-    at a losing price is refused here like anywhere else.
-
-    `opportunities`: the best value on the board, which is often a less likely bet. Only
-    cards that make money after fees, and one line per bet rather than every ladder rung.
-    """
+async def build_cards(analysis, user):
+    """Value cards and likely-winner cards for the current analysis (shared by
+    /api/opportunities and /api/board)."""
     from app.data import teams
     from app.strategies import explain
     from app.strategies import recommendation as rec
-
-    analysis = await engine.cached_analysis()
-    user = getattr(request.state, "user", None) if request else None
 
     if user:
         risk, _ = await execution.live_risk(user)
@@ -82,10 +70,30 @@ async def opportunities(limit: int = Query(default=15, le=100),
     # A wide pull, because filtering happens after fees on the built card.
     value_cards = [c for c in (build_card(s) for s in
                                engine.best_opportunities(analysis, limit=200)) if c]
-    ordered = rec.one_per_bet(rec.rank(rec.profitable(value_cards)))[:limit]
-
     likely_cards = [c for c in (build_card(s) for s in engine.likely_candidates(analysis))
                     if c]
+    return value_cards, likely_cards
+
+
+@router.get("/api/opportunities")
+async def opportunities(limit: int = Query(default=15, le=100),
+                        request: Request = None):
+    """Two lists, answering two different questions.
+
+    `high_win_rate`: bets likely to win (65%+, and the market agrees) that are still priced
+    fairly after fees, one per game, each with a plain-language breakdown. A likely winner
+    at a losing price is refused here like anywhere else.
+
+    `opportunities`: the best value on the board, which is often a less likely bet. Only
+    cards that make money after fees, and one line per bet rather than every ladder rung.
+    """
+    from app.strategies import recommendation as rec
+
+    analysis = await engine.cached_analysis()
+    user = getattr(request.state, "user", None) if request else None
+    value_cards, likely_cards = await build_cards(analysis, user)
+    ordered = rec.one_per_bet(rec.rank(rec.profitable(value_cards)))[:limit]
+
     high_win = rec.rank_high_win_rate(likely_cards)[:8]
 
     return {
@@ -478,3 +486,30 @@ async def default_backtest():
 
     seasons = [settings.SEASON - 3, settings.SEASON - 2, settings.SEASON - 1]
     return await research.run("backtest", seasons=[s for s in seasons if s >= 1999])
+
+
+@router.get("/api/board")
+async def board(request: Request):
+    """The Trade Board: every positive-edge card with its calibrated hit % and evidence."""
+    import asyncio
+    import time as _time
+
+    from app.config import live_trading_available
+    from app.research import board as board_mod
+    from app.research import calibration, evidence
+
+    analysis = await engine.cached_analysis()
+    user = getattr(request.state, "user", None)
+    value_cards, likely_cards = await build_cards(analysis, user)
+    ev_map = await asyncio.to_thread(evidence.assess_all)
+    cal_map = await asyncio.to_thread(calibration.calibrators)
+    cards = board_mod.assemble(value_cards + likely_cards, evidence=ev_map, calibrators=cal_map,
+                               live_allowed=live_trading_available(user)[0])
+    counts = {s: sum(1 for c in cards if c["evidence"]["state"] == s)
+              for s in ("PROVEN", "WATCHING", "FAILING")}
+    return {
+        "season": analysis.season, "week": analysis.week, "built_at": _time.time(),
+        "cards": cards, "counts": counts, "thresholds": evidence.thresholds(),
+        "empty_reason": None if cards else (
+            "No contract on the board has a positive edge after fees at the calibrated hit %."),
+    }
