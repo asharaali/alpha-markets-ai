@@ -106,6 +106,9 @@ class Settings:
     # ---------------- risk defaults ----------------
     DEFAULT_BANKROLL: float = _float("DEFAULT_BANKROLL", 1000.0)
     KELLY_FRACTION: float = _float("KELLY_FRACTION", 0.25)
+    # Evidence gate (terminal spec): PROVEN needs at least this much independent evidence.
+    EVIDENCE_MIN_CALLS: int = _int("EVIDENCE_MIN_CALLS", 150)
+    EVIDENCE_MIN_CLUSTERS: int = _int("EVIDENCE_MIN_CLUSTERS", 40)
     MAX_STAKE_PCT: float = _float("MAX_STAKE_PCT", 0.05)
     MAX_EXPOSURE_PER_GAME_PCT: float = _float("MAX_EXPOSURE_PER_GAME_PCT", 0.10)
     MAX_EXPOSURE_PER_TEAM_PCT: float = _float("MAX_EXPOSURE_PER_TEAM_PCT", 0.15)

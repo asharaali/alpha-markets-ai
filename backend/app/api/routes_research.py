@@ -325,3 +325,16 @@ async def model_lab():
                        "gate, risk sizing and the parlay engine decide what is actionable."},
         ],
     }
+
+
+@router.get("/api/research/evidence")
+async def research_evidence():
+    """Evidence state per strategy x market type, and the thresholds that decide it."""
+    import asyncio
+
+    from app.research import evidence
+    families = await asyncio.to_thread(evidence.assess_all)
+    order = {"PROVEN": 0, "WATCHING": 1, "FAILING": 2}
+    rows = sorted((e.to_dict() for e in families.values()),
+                  key=lambda d: (order[d["state"]], -d["clusters"]))
+    return {"thresholds": evidence.thresholds(), "families": rows}
