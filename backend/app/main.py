@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import auth
@@ -95,14 +95,38 @@ if STATIC_DIR.is_dir():
 _SHELL_HEADERS = {"Cache-Control": "no-cache"}
 
 
+TERMINAL_DIR = STATIC_DIR / "terminal"   # React build output (frontend/ → npm run build)
+CLASSIC_SHELL = STATIC_DIR / "classic" / "index.html"   # the pre-terminal vanilla-JS app
+
+_MISSING_BUILD = """<!doctype html><title>Terminal not built</title>
+<pre>The terminal frontend has not been built on this checkout.
+
+  cd frontend && npm run build
+
+then reload. The previous app is still at /classic.</pre>"""
+
+
+def _terminal_shell():
+    shell = TERMINAL_DIR / "index.html"
+    if not shell.is_file():
+        return HTMLResponse(_MISSING_BUILD, status_code=503, headers=_SHELL_HEADERS)
+    return FileResponse(shell, headers=_SHELL_HEADERS)
+
+
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(STATIC_DIR / "index.html", headers=_SHELL_HEADERS)
+    return _terminal_shell()
+
+
+@app.get("/classic", include_in_schema=False)
+@app.get("/classic/{path:path}", include_in_schema=False)
+def classic(path: str = ""):
+    return FileResponse(CLASSIC_SHELL, headers=_SHELL_HEADERS)
 
 
 @app.get("/{path:path}", include_in_schema=False)
 def spa(path: str):
-    """Single-page app: unknown non-API paths render the shell and route client-side."""
+    """Single-page app: unknown non-API paths render the terminal and route client-side."""
     if path.startswith("api/"):
         return JSONResponse({"error": "not_found", "message": f"no endpoint /{path}"},
                             status_code=404)
@@ -112,4 +136,4 @@ def spa(path: str):
     candidate = (STATIC_DIR / path).resolve()
     if candidate.is_relative_to(root) and candidate.is_file():
         return FileResponse(candidate)
-    return FileResponse(STATIC_DIR / "index.html", headers=_SHELL_HEADERS)
+    return _terminal_shell()
