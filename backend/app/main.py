@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import auth
-from app.api import routes_research, routes_system, routes_trading
+from app.api import privacy, routes_research, routes_system, routes_trading
 from app.config import settings
 from app.core.errors import AlphaError
 from app.core.logging import configure, get_logger
@@ -34,13 +34,6 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 # prices, strategies and backtests are the product, not a paywalled extra. Anything that
 # touches money or a specific user's data requires a session, because it is meaningless
 # without an identity to attach it to.
-PUBLIC_PATHS = {
-    "/api/health", "/api/login", "/api/signup", "/api/logout", "/api/me",
-    "/api/status/jobs",
-}
-PUBLIC_PREFIXES = ("/api/slate", "/api/games", "/api/predictions", "/api/markets",
-                   "/api/market-movers", "/api/strategies", "/api/model",
-                   "/api/parlays", "/api/opportunities", "/api/backtest")
 
 
 @asynccontextmanager
@@ -63,17 +56,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
 
 @app.middleware("http")
 async def identify_user(request: Request, call_next):
-    """Attach the session user, and gate anything that is not public research."""
+    """Attach the session user; every API path is private unless allowlisted in privacy.py."""
     request.state.user = auth.read_token(request.cookies.get(auth.COOKIE_NAME))
     path = request.url.path
     if path.startswith("/api/") and not request.state.user:
-        public = (path in PUBLIC_PATHS
-                  or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES))
-        if not public:
-            return JSONResponse(
-                {"error": "unauthorized",
-                 "message": "Log in to use portfolio, bankroll and trading features."},
-                status_code=401)
+        if not privacy.is_public(path):
+            return JSONResponse({"error": "unauthorized",
+                                 "message": privacy.UNAUTHORIZED_MESSAGE}, status_code=401)
     return await call_next(request)
 
 

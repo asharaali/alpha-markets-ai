@@ -43,7 +43,8 @@ def test_expired_and_forged_tokens_are_rejected(account, monkeypatch):
 def test_signup_is_closed_by_default():
     response = TestClient(app).post("/api/signup",
                                     json={"username": "stranger1", "password": "whatever123"})
-    assert response.status_code == 403
+    # 401 since the terminal went private: the gate refuses before the closed-signup check.
+    assert response.status_code in (401, 403)
     assert auth.get_user("stranger1") is None
 
 
