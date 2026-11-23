@@ -1,5 +1,5 @@
 import { Panel } from "../components/Panel";
-import { useApi } from "../lib/api";
+import { isDemo, useApi } from "../lib/api";
 
 interface Jobs { enabled: boolean; jobs: Record<string, { runs: number; errors: number; last_run: number | null; last_error: string | null }> }
 
@@ -14,7 +14,8 @@ export function JobsHealth() {
     maxAgeSec: 1200, refreshSec: 120,
     asOf: (d) => Math.max(0, ...Object.values(d.jobs).map((j) => j.last_run ?? 0)) || null,
   });
-  const now = Date.now() / 1000;
+  // A demo snapshot is frozen in time: measure ages against the snapshot, not today.
+  const now = isDemo() && asOf ? asOf : Date.now() / 1000;
   return (
     <Panel title="Background jobs" source="scheduler" status={status} asOf={asOf} error={error}>
       <table className="table">

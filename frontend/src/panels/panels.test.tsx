@@ -68,3 +68,19 @@ describe("JobsHealth", () => {
     expect(within(snaps).getByText("OK")).toBeInTheDocument();
   });
 });
+
+describe("JobsHealth in demo mode", () => {
+  afterEach(() => window.history.pushState({}, "", "/"));
+  it("measures job age against the snapshot, so an old demo never reads STALE", async () => {
+    window.history.pushState({}, "", "/demo");
+    const snapshotTime = Date.now() / 1000 - 30 * 86400;   // snapshot taken a month ago
+    const old = { enabled: true, running: true, jobs: {
+      grading: { runs: 1, errors: 0, last_run: snapshotTime - 300, last_error: null },
+      market_snapshots: { runs: 1, errors: 0, last_run: snapshotTime, last_error: null } } };
+    stubFetch({ "/static/terminal/demo/status_jobs.json": [200, old] });
+    render(<JobsHealth />);
+    const grading = (await screen.findByText("grading")).closest("tr")!;
+    expect(within(grading).getByText("OK")).toBeInTheDocument();
+    expect(within(grading).getByText("5m")).toBeInTheDocument();
+  });
+});
