@@ -17,7 +17,10 @@ def parse_events(payload: Dict[str, Any]) -> List[BrowseMarket]:
             last = to_price(m.get("last_price_dollars"))
             if bid is None and ask is None:
                 continue                      # no book: nothing tradable to show
-            title = m.get("title") or event.get("title") or m.get("ticker")
+            title = str(m.get("title") or event.get("title") or m.get("ticker"))
+            sub = str(m.get("yes_sub_title") or "")
+            if sub and sub.lower() not in title.lower():
+                title = f"{title} — {sub}"        # multi-outcome events share one title
             try:
                 volume = float(m.get("volume_fp") or 0) or None
             except (TypeError, ValueError):

@@ -54,3 +54,15 @@ def test_one_venue_down_still_returns_the_other(monkeypatch):
     markets, warnings = asyncio.run(routes_markets.fetch_all())
     assert markets and all(m.venue == "kalshi" for m in markets)
     assert warnings == ["Polymarket US unavailable: gateway timeout"]
+
+
+def test_kalshi_multi_outcome_rows_name_the_outcome():
+    payload = {"events": [{"event_ticker": "KXPOPE", "series_ticker": "KXPOPE", "title": "Who will the next Pope be?",
+                           "category": "Elections", "markets": [
+        {"ticker": "KXPOPE-A", "title": "Who will the next Pope be?", "yes_sub_title": "Pietro Parolin",
+         "yes_bid_dollars": "0.0300", "yes_ask_dollars": "0.0500"},
+        {"ticker": "KXPOPE-B", "title": "Will Elon visit Mars?", "yes_sub_title": "Mars",
+         "yes_bid_dollars": "0.1000", "yes_ask_dollars": "0.1300"}]}]}
+    a, b = kalshi_browse.parse_events(payload)
+    assert a.title == "Who will the next Pope be? — Pietro Parolin"
+    assert b.title == "Will Elon visit Mars?"          # sub-title already in the title: unchanged

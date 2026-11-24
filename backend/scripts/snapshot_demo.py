@@ -21,7 +21,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-ENDPOINTS = ("/slate", "/strategies", "/status/jobs", "/health")
+ENDPOINTS = ("/slate", "/strategies", "/status/jobs", "/health",
+             "/board", "/research/evidence", "/markets/browse", "/research/briefs")
 OUT = Path(__file__).resolve().parents[2] / "frontend/public/demo"
 FORBIDDEN = re.compile(r"(?i)balance|bankroll|position|account|user|email|order_id|client_order|kalshi_key")
 
@@ -37,6 +38,18 @@ def sanitize(obj: Any) -> Any:
 
 def demo_me() -> dict:
     return {"user": "demo", "live_trading": {"allowed": False, "reason": "demo"}}
+
+
+def demo_board(board: dict) -> dict:
+    """The demo can look at cards but never trade them."""
+    for card in board.get("cards", []):
+        card["trade"] = {**card.get("trade", {}), "in_app": False}
+    return board
+
+
+def finish(path: str, data: Any) -> Any:
+    data = sanitize(data)
+    return demo_board(data) if path == "/board" else data
 
 
 def demo_file(path: str) -> str:
@@ -64,10 +77,11 @@ def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     for path in ENDPOINTS:
         with opener.open(f"{args.base}/api{path}", timeout=180) as resp:
-            data = sanitize(json.load(resp))
+            data = finish(path, json.load(resp))
         (OUT / demo_file(path)).write_text(json.dumps(data, separators=(",", ":")))
         print(f"wrote {demo_file(path)}")
     (OUT / "me.json").write_text(json.dumps(demo_me()))
+    (OUT / "journal.json").write_text(json.dumps({"entries": [], "summary": {}}))
     return 0
 
 

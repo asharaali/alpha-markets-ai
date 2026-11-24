@@ -44,3 +44,13 @@ def test_committed_snapshots_carry_no_account_fields():
         if f.name == "me.json":
             bad = [k for k in bad if k != "user"]   # the fixed "demo" identity
         assert not bad, f"{f.name} carries {bad}"
+
+
+def test_demo_board_never_offers_in_app_trading():
+    board = {"cards": [{"id": "c1", "trade": {"url": "https://kalshi.com/markets/x", "in_app": True}}]}
+    assert snapshot_demo.demo_board(board)["cards"][0]["trade"] == {"url": "https://kalshi.com/markets/x", "in_app": False}
+
+
+def test_snapshot_covers_the_module_2_pages():
+    for path in ("/board", "/research/evidence", "/markets/browse", "/research/briefs"):
+        assert path in snapshot_demo.ENDPOINTS
