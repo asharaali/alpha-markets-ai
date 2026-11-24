@@ -101,12 +101,18 @@ def test_endpoint_includes_each_familys_calibration_table(account, monkeypatch):
     from app.research import calibration
     rows = _rows(60, model_skill=1.0, market_skill=0.3)
     monkeypatch.setattr(evidence, "group_settled", lambda **kw: {("ensemble", "spread"): rows})
+
+    async def child(kind, **params):          # stands in for the out-of-process scan
+        return evidence.snapshot()
+    monkeypatch.setattr("app.jobs.research.run", child)
+    evidence._LOADED.clear()
     evidence._CACHE.update(value=None)
     calibration._CACHE.update(value=None)
     client = TestClient(app)
     client.post("/api/login", json={"username": account, "password": "evidence-password"})
     [fam] = client.get("/api/research/evidence").json()["families"]
     assert fam["calibration"] and {"bucket", "n", "predicted", "observed"} <= set(fam["calibration"][0])
+    evidence._LOADED.clear()
     evidence._CACHE.update(value=None)
     calibration._CACHE.update(value=None)
 

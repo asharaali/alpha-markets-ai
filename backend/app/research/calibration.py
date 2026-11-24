@@ -52,6 +52,15 @@ class Calibrator:
         observed = self.hits[b] / n if n else 0.0
         return (n * observed + SHRINK_K * anchor) / (n + SHRINK_K)
 
+    def to_state(self) -> Dict[str, List]:
+        return {"n": self.n, "hits": self.hits, "psum": self.psum}
+
+    @classmethod
+    def from_state(cls, state: Dict[str, List]) -> "Calibrator":
+        c = cls()
+        c.n, c.hits, c.psum = list(state["n"]), list(state["hits"]), [float(x) for x in state["psum"]]
+        return c
+
     def table(self) -> List[Dict[str, Any]]:
         return [{"bucket": f"{b * 10}-{b * 10 + 10}%", "n": self.n[b],
                  "predicted": round(self.psum[b] / self.n[b], 4),

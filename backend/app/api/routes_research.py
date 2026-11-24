@@ -251,7 +251,20 @@ async def market_movers(limit: int = Query(default=12, le=50)):
 
 @router.get("/api/strategies")
 async def strategies():
-    """Every strategy's methodology, inputs, limitations and measured record."""
+    """Every strategy's methodology, inputs, limitations and measured record.
+
+    The record scans every settled prediction: ~1s of CPU locally, ~10s on Render's half CPU.
+    On the event loop that starved /api/health and Render killed the instance on every boot
+    (2026-11-23), so it runs in the niced research child process, cached per 30 minutes.
+    """
+    import time as _time
+
+    from app.jobs import research
+    return await research.run("strategies", bucket=int(_time.time() // 1800))
+
+
+def strategies_report() -> Dict[str, Any]:
+    """The /api/strategies payload. Runs in the research child process."""
     from app.tracking import metrics
 
     from app.evaluation import protocol
@@ -333,9 +346,8 @@ async def research_evidence():
     """Evidence state per strategy x market type, and the thresholds that decide it."""
     import asyncio
 
-    from app.research import calibration, evidence
-    families = await asyncio.to_thread(evidence.assess_all)
-    cals = await asyncio.to_thread(calibration.calibrators)
+    from app.research import evidence
+    families, cals = await evidence.load()         # computed out of process (GIL)
     order = {"PROVEN": 0, "WATCHING": 1, "FAILING": 2}
     rows = sorted(({**e.to_dict(), "calibration": cals[f].table() if f in cals else []}
                    for f, e in families.items()),

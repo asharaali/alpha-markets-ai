@@ -41,6 +41,12 @@ async def _compute(kind: str, params: Dict[str, Any]) -> Any:
     if kind == "evaluation":
         from app.evaluation import report
         return await report.run(**params)
+    if kind == "strategies":
+        from app.api.routes_research import strategies_report
+        return strategies_report()
+    if kind == "evidence":
+        from app.research import evidence
+        return evidence.snapshot()
     if kind == "backtest":
         from app.backtest import engine
         return await engine.run(**params)

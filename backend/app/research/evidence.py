@@ -160,3 +160,44 @@ def assess_all(*, force: bool = False) -> Dict[Family, Evidence]:
 
 def thresholds() -> Dict[str, int]:
     return {"min_calls": settings.EVIDENCE_MIN_CALLS, "min_clusters": settings.EVIDENCE_MIN_CLUSTERS}
+
+
+# ── off-process scan (see tests/test_evidence_offprocess.py) ──────────────────
+
+def snapshot() -> Dict[str, Any]:
+    """Evidence and calibration for every family, as plain JSON. Runs in the child process."""
+    from app.research.calibration import Calibrator
+    out = []
+    for fam, rows in group_settled(force=True).items():
+        e = assess(rows)
+        out.append({"evidence": asdict(e), "calibration": Calibrator().fit(rows).to_state()})
+    return {"families": out, "computed_at": time.time()}
+
+
+def from_snapshot(snap: Dict[str, Any]):
+    from app.research.calibration import Calibrator
+    ev_map: Dict[Family, Evidence] = {}
+    cal_map: Dict[Family, Calibrator] = {}
+    for item in snap.get("families", []):
+        d = dict(item["evidence"])
+        fam = tuple(d["family"])
+        d["family"] = fam
+        d["ci95"] = tuple(d["ci95"]) if d.get("ci95") else None
+        ev_map[fam] = Evidence(**d)
+        cal_map[fam] = Calibrator.from_state(item["calibration"])
+    return ev_map, cal_map
+
+
+_LOADED: Dict[int, Any] = {}
+
+
+async def load():
+    """(evidence, calibrators) for the current 30-minute bucket, computed in a niced child
+    process and cached on disk + in memory. The web process never runs the scan itself."""
+    from app.jobs import research
+    bucket = int(time.time() // CACHE_SECONDS)
+    if bucket not in _LOADED:
+        snap = await research.run("evidence", bucket=bucket)
+        _LOADED.clear()
+        _LOADED[bucket] = from_snapshot(snap)
+    return _LOADED[bucket]

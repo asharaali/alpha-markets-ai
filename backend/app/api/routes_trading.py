@@ -499,8 +499,7 @@ async def board_payload(user):
 
     analysis = await engine.cached_analysis()
     value_cards, likely_cards = await build_cards(analysis, user)
-    ev_map = await asyncio.to_thread(evidence.assess_all)
-    cal_map = await asyncio.to_thread(calibration.calibrators)
+    ev_map, cal_map = await evidence.load()       # computed out of process (GIL)
     cards = board_mod.assemble(value_cards + likely_cards, evidence=ev_map, calibrators=cal_map,
                                live_allowed=live_trading_available(user)[0])
     counts = {s: sum(1 for c in cards if c["evidence"]["state"] == s)
