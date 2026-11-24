@@ -37,9 +37,11 @@ def _fresh_cache():
     briefs._CACHE.clear()
 
 
-def test_without_a_key_briefs_are_off(monkeypatch):
+def test_ai_mode_without_a_key_falls_back_to_templates(monkeypatch):
+    monkeypatch.setenv("BRIEFS_MODE", "ai")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    assert asyncio.run(briefs.generate(CARDS)) == {"enabled": False, "reason": "No ANTHROPIC_API_KEY configured."}
+    out = asyncio.run(briefs.generate(CARDS))
+    assert out["enabled"] is True and out["source"] == "template"
 
 
 def test_prompt_carries_every_field_and_the_citation_rule():
@@ -52,6 +54,7 @@ def test_prompt_carries_every_field_and_the_citation_rule():
 
 
 def test_generates_one_brief_per_card_with_the_default_model(monkeypatch):
+    monkeypatch.setenv("BRIEFS_MODE", "ai")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     fake = FakeClient()
     monkeypatch.setattr(briefs, "_client", lambda: fake)
@@ -62,6 +65,7 @@ def test_generates_one_brief_per_card_with_the_default_model(monkeypatch):
 
 
 def test_api_error_returns_cleanly_without_raising(monkeypatch):
+    monkeypatch.setenv("BRIEFS_MODE", "ai")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     monkeypatch.setattr(briefs, "_client", lambda: FakeClient(fail=True))
     out = asyncio.run(briefs.generate(CARDS))
@@ -69,6 +73,7 @@ def test_api_error_returns_cleanly_without_raising(monkeypatch):
 
 
 def test_cache_hit_avoids_a_second_call(monkeypatch):
+    monkeypatch.setenv("BRIEFS_MODE", "ai")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     fake = FakeClient()
     monkeypatch.setattr(briefs, "_client", lambda: fake)
@@ -78,6 +83,7 @@ def test_cache_hit_avoids_a_second_call(monkeypatch):
 
 
 def test_refusal_is_reported_not_shown_as_a_brief(monkeypatch):
+    monkeypatch.setenv("BRIEFS_MODE", "ai")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     fake = FakeClient()
 
@@ -87,3 +93,47 @@ def test_refusal_is_reported_not_shown_as_a_brief(monkeypatch):
     monkeypatch.setattr(briefs, "_client", lambda: fake)
     out = asyncio.run(briefs.generate(CARDS[:1]))
     assert out["briefs"] == [] and "declined" in out["error"]
+
+
+# ── template briefs (the default: free, no key, nothing invented) ─────────────
+
+def test_default_mode_is_template_and_needs_no_key(monkeypatch):
+    monkeypatch.delenv("BRIEFS_MODE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    out = asyncio.run(briefs.generate(CARDS))
+    assert out["enabled"] is True and out["source"] == "template"
+    assert [b["card_id"] for b in out["briefs"]] == ["c1", "c2"]
+
+
+def test_template_states_the_numbers_reasons_gaps_and_trust():
+    text = briefs.template_brief(CARDS[0])["text"]
+    assert "Bengals (YES) · Bengals at Commanders" in text
+    assert "31% vs 25¢" in text and "+4.6¢ after fees" in text
+    assert "Why: QB injury not priced." in text
+    assert "Missing: No weather forecast." in text
+    assert "Trust: WATCHING. Only 14 games settled (needs 40)." in text
+    assert "No stake until proven." in text
+
+
+def test_template_for_a_proven_card_says_so_and_has_no_gap_line():
+    text = briefs.template_brief(CARDS[1])["text"]
+    assert "Trust: PROVEN. Beats the market on 60 games." in text
+    assert "Missing" not in text
+    assert "No stake until proven." not in text
+
+
+def test_template_flags_a_thin_edge():
+    thin = {**CARDS[0], "edge_cents": 0.6}
+    assert "Thin edge: under 1¢ after fees, so a small price move erases it." in briefs.template_brief(thin)["text"]
+
+
+def test_ai_cache_survives_a_board_rebuild_with_new_card_ids(monkeypatch):
+    monkeypatch.setenv("BRIEFS_MODE", "ai")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    fake = FakeClient()
+    monkeypatch.setattr(briefs, "_client", lambda: fake)
+    first = [{**c, "ticker": f"KX-{i}"} for i, c in enumerate(CARDS)]
+    rebuilt = [{**c, "id": c["id"] + "-new"} for c in first]      # same contracts, new ids
+    asyncio.run(briefs.generate(first))
+    asyncio.run(briefs.generate(rebuilt))
+    assert fake.calls == 2

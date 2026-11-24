@@ -1,6 +1,9 @@
-"""Research briefs: short notes Claude writes from the board's own data.
+"""Research briefs: a short note per board card.
 
-Each brief sees one card's JSON and nothing else. It must cite the field behind every claim
+Default (BRIEFS_MODE unset or "template"): written by code from the card's own fields. Free,
+no key, works in the demo, and cannot invent anything, which is the whole point of a brief.
+
+Optional (BRIEFS_MODE=ai and ANTHROPIC_API_KEY set): Claude writes it instead. Each brief sees one card's JSON and nothing else. It must cite the field behind every claim
 in [brackets], say "insufficient data" rather than guess, and never suggest a stake — sizing
 belongs to the evidence gate. Off unless ANTHROPIC_API_KEY is set. Failures return a reason,
 never a 500. Refusals use the server-side fallback; a refusal that survives it is reported.
@@ -51,20 +54,53 @@ async def _one(client, card: Dict[str, Any]) -> Dict[str, Any]:
     return {"card_id": card.get("id"), "title": f"{card.get('selection')} · {card.get('matchup')}", "text": text}
 
 
+def _c(p: float) -> str:
+    return f"{round(p * 100)}¢"
+
+
+def template_brief(card: Dict[str, Any]) -> Dict[str, Any]:
+    ev = card.get("evidence") or {}
+    state = ev.get("state", "WATCHING")
+    edge = float(card.get("edge_cents") or 0)
+    lines = [
+        f"{card.get('selection')} ({str(card.get('side', 'yes')).upper()}) · {card.get('matchup')}",
+        f"Hit {round(float(card.get('hit', 0)) * 100)}% vs {_c(float(card.get('price', 0)))} · "
+        f"{'+' if edge > 0 else ''}{edge:.1f}¢ after fees.",
+    ]
+    if card.get("reasons"):
+        lines.append("Why: " + "; ".join(card["reasons"]) + ".")
+    if card.get("missing"):
+        lines.append("Missing: " + " ".join(card["missing"]))
+    if 0 < edge < 1:
+        lines.append("Thin edge: under 1¢ after fees, so a small price move erases it.")
+    lines.append(f"Trust: {state}. {ev.get('reason', '')}".rstrip())
+    if state != "PROVEN":
+        lines.append("No stake until proven.")
+    return {"card_id": card.get("id"), "title": f"{card.get('selection')} · {card.get('matchup')}",
+            "text": "\n".join(lines)}
+
+
+def _templates(cards: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {"enabled": True, "source": "template", "generated_at": time.time(),
+            "briefs": [template_brief(c) for c in cards]}
+
+
 async def generate(cards: List[Dict[str, Any]]) -> Dict[str, Any]:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return {"enabled": False, "reason": "No ANTHROPIC_API_KEY configured."}
-    key = "|".join(str(c.get("id")) for c in cards)
+    if os.environ.get("BRIEFS_MODE", "template").lower() != "ai" or not os.environ.get("ANTHROPIC_API_KEY"):
+        return _templates(cards)
+    # Keyed on the contracts, not card ids: ids change on every board rebuild, which would
+    # turn a 6-hour cache into a fresh paid call every refresh.
+    key = "|".join(sorted(f"{c.get('ticker') or c.get('id')}:{c.get('side')}" for c in cards))
     hit = _CACHE.get(key)
     if hit and time.time() - hit["generated_at"] < CACHE_SECONDS:
         return hit
     if not cards:
-        return {"enabled": True, "generated_at": time.time(), "briefs": []}
+        return {"enabled": True, "source": "ai", "generated_at": time.time(), "briefs": []}
     client = _client()
     results = await asyncio.gather(*(_one(client, c) for c in cards), return_exceptions=True)
     done = [r for r in results if not isinstance(r, BaseException)]
     errors = [str(r) for r in results if isinstance(r, BaseException)]
-    out: Dict[str, Any] = {"enabled": True, "generated_at": time.time(), "briefs": done}
+    out: Dict[str, Any] = {"enabled": True, "source": "ai", "generated_at": time.time(), "briefs": done}
     if errors:
         out["error"] = f"{len(errors)} brief(s) failed: {errors[0]}"
         if not done and key in _CACHE:

@@ -61,3 +61,15 @@ describe("Markets page", () => {
     expect(screen.getByText("Chiefs win Super Bowl?")).toBeInTheDocument();
   });
 });
+
+describe("Briefs panel", () => {
+  it("shows template briefs and says how they were written", async () => {
+    stubFetch({ "/api/research/evidence": [200, EVIDENCE], "/api/journal": [200, JOURNAL],
+      "/api/research/briefs": [200, { enabled: true, source: "template", generated_at: Date.now() / 1000,
+        briefs: [{ card_id: "c1", title: "Bengals · Bengals at Commanders", text: "Hit 31% vs 25¢\nTrust: WATCHING." }] }] });
+    render(<MemoryRouter><Research /></MemoryRouter>);
+    const panel = await screen.findByRole("region", { name: "Research briefs" });
+    expect(await within(panel).findByText("Bengals · Bengals at Commanders")).toBeInTheDocument();
+    expect(within(panel).getByText("written from each card's own data")).toBeInTheDocument();
+  });
+});
