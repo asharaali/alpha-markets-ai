@@ -94,6 +94,24 @@ async def run(kind: str, **params: Any) -> Any:
         return _read_once(path)
 
 
+async def cached(kind: str, **params: Any) -> Any:
+    """For page loads: this bucket's result if it exists, else the newest finished one, and only
+    compute (in the child) when nothing has ever been computed. The scheduler's
+    research_snapshots job does the real refreshing, so opening a page never starts a scan on
+    Render's half CPU."""
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    current = RESULT_DIR / f"{kind}_{_key(kind, params)}.json"
+    if current.exists():
+        return _read_once(current)
+    older = sorted(RESULT_DIR.glob(f"{kind}_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in older:
+        try:
+            return _read(path)
+        except Exception:
+            continue
+    return await run(kind, **params)
+
+
 def _read_once(path: Path) -> Any:
     """Read a result; an error result is reported once, never cached."""
     try:

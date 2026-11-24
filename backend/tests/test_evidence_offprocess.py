@@ -40,7 +40,7 @@ def test_load_reads_the_child_result_and_never_scans_in_process(groups, monkeypa
         raise AssertionError("the web process ran the settled-row scan")
 
     monkeypatch.setattr(evidence, "group_settled", boom)
-    monkeypatch.setattr("app.jobs.research.run", fake_run)
+    monkeypatch.setattr("app.jobs.research.cached", fake_run)
     evidence._LOADED.clear()
     ev_map, cal_map = asyncio.run(evidence.load())
     assert ev_map[("ensemble", "spread")].state == "PROVEN"
@@ -72,7 +72,7 @@ def test_strategies_endpoint_reads_the_child_result_and_never_scans_in_process(m
     auth.create_user(name, "strategies-pw")
     client = TestClient(app)
     client.post("/api/login", json={"username": name, "password": "strategies-pw"})
-    monkeypatch.setattr("app.jobs.research.run", fake_run)
+    monkeypatch.setattr("app.jobs.research.cached", fake_run)
     monkeypatch.setattr(store, "iter_settled_predictions", boom)
     r = client.get("/api/strategies")
     auth.disable_user(name)

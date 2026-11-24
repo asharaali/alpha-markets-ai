@@ -66,6 +66,9 @@ CREATE INDEX IF NOT EXISTS idx_pred_game ON predictions(game_id);
 CREATE INDEX IF NOT EXISTS idx_pred_status ON predictions(status);
 CREATE INDEX IF NOT EXISTS idx_pred_strategy ON predictions(strategy);
 CREATE INDEX IF NOT EXISTS idx_pred_created ON predictions(created_at);
+-- latest-forecast-per-contract lookups (evidence gate, strategy records) without a Python scan
+CREATE INDEX IF NOT EXISTS idx_pred_forecast
+    ON predictions(status, game_id, strategy, market_type, selection, created_at);
 
 CREATE TABLE IF NOT EXISTS market_snapshots (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -472,6 +475,34 @@ def settled_strategies() -> List[str]:
     return [r[0] for r in connection().execute(
         "SELECT DISTINCT strategy FROM predictions "
         "WHERE status='settled' AND outcome IS NOT NULL")]
+
+
+def latest_settled_forecasts(columns: Sequence[str] = SCORING_COLUMNS) -> Iterator[Dict[str, Any]]:
+    """The latest settled row per forecast (game, strategy, market type, selection).
+
+    SQLite does the collapse in C; Python only sees ~1 row per forecast instead of every
+    10-minute refresh (2026-11-23: scanning ~300k raw rows in Python starved Render's half CPU).
+    Ties on created_at can return more than one row per forecast; callers dedupe again.
+    """
+    init()
+    cols = ", ".join(f"p.{c}" for c in columns)
+    q = f"""SELECT {cols} FROM predictions p
+        JOIN (SELECT game_id g, strategy s, market_type m, selection x, MAX(created_at) c
+              FROM predictions WHERE status='settled' AND outcome IS NOT NULL
+              GROUP BY game_id, strategy, market_type, selection) l
+          ON p.game_id=l.g AND p.strategy=l.s AND p.market_type=l.m AND p.selection=l.x
+         AND p.created_at=l.c
+        WHERE p.status='settled' AND p.outcome IS NOT NULL"""
+    for row in connection().execute(q):
+        yield dict(row)
+
+
+def settled_raw_counts() -> Dict[str, int]:
+    """Settled rows per strategy, refreshes included (the 'raw_rows' a record reports)."""
+    init()
+    return {r["strategy"]: r["n"] for r in connection().execute(
+        "SELECT strategy, COUNT(*) n FROM predictions WHERE status='settled' AND outcome IS NOT NULL"
+        " GROUP BY strategy")}
 
 
 def iter_settled_predictions(strategy: Optional[str] = None, *,

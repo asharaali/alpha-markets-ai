@@ -260,7 +260,7 @@ async def strategies():
     import time as _time
 
     from app.jobs import research
-    return await research.run("strategies", bucket=int(_time.time() // 1800))
+    return await research.cached("strategies", bucket=int(_time.time() // 1800))
 
 
 def strategies_report() -> Dict[str, Any]:
@@ -271,8 +271,8 @@ def strategies_report() -> Dict[str, Any]:
 
     # summarise() collapses refreshes per strategy anyway; doing it while streaming keeps
     # memory bounded by distinct forecasts instead of every hourly refresh.
-    stream, raw = protocol.tally(store.iter_settled_predictions(), ("strategy",))
-    settled = protocol.deduplicate(stream)
+    raw = {"strategy": store.settled_raw_counts()}
+    settled = protocol.deduplicate(store.latest_settled_forecasts())
     by_strategy = {row["strategy"]: [] for row in settled}
     for row in settled:
         by_strategy[row["strategy"]].append(row)

@@ -111,6 +111,30 @@ async def _grade_once() -> Dict[str, Any]:
     return result
 
 
+async def _research_once() -> Dict[str, Any]:
+    """Refresh the evidence gate and strategy records in the niced child process, so page
+    loads only ever read a finished result."""
+    import time as _time
+
+    from app.jobs import research
+    bucket = int(_time.time() // 1800)
+    out = {}
+    for kind in ("evidence", "strategies"):
+        started = _time.time()
+        await research.run(kind, bucket=bucket)
+        out[kind] = round(_time.time() - started, 1)
+    return {"seconds": out, "bucket": bucket}
+
+
+def job_specs():
+    return [
+        ("calibration", 6 * 3600, _calibrate_once),
+        ("market_snapshots", settings.MARKET_SNAPSHOT_INTERVAL, _snapshot_once),
+        ("grading", settings.GRADING_INTERVAL, _grade_once),
+        ("research_snapshots", 1800, _research_once),
+    ]
+
+
 def start() -> None:
     """Launch the background jobs. Called once from the app's startup hook."""
     if not settings.JOBS_ENABLED:
@@ -119,12 +143,7 @@ def start() -> None:
     if _tasks:
         return
 
-    specs = [
-        ("calibration", 6 * 3600, _calibrate_once),
-        ("market_snapshots", settings.MARKET_SNAPSHOT_INTERVAL, _snapshot_once),
-        ("grading", settings.GRADING_INTERVAL, _grade_once),
-    ]
-    for name, interval, body in specs:
+    for name, interval, body in job_specs():
         task = asyncio.create_task(_loop(name, interval, body), name=name)
         _tasks.append(task)
     log.info("started %d background jobs", len(_tasks))

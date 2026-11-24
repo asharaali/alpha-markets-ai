@@ -141,7 +141,7 @@ def group_settled(*, force: bool = False) -> Dict[Family, List[Dict[str, Any]]]:
     with _GROUP_LOCK:
         if not force and _GROUPS["value"] is not None and time.time() - _GROUPS["at"] < CACHE_SECONDS:
             return _GROUPS["value"]
-        value = dedupe_by_family(store.iter_settled_predictions())
+        value = dedupe_by_family(store.latest_settled_forecasts())
         _GROUPS.update(at=time.time(), value=value)
         return value
 
@@ -197,7 +197,7 @@ async def load():
     from app.jobs import research
     bucket = int(time.time() // CACHE_SECONDS)
     if bucket not in _LOADED:
-        snap = await research.run("evidence", bucket=bucket)
+        snap = await research.cached("evidence", bucket=bucket)
         _LOADED.clear()
         _LOADED[bucket] = from_snapshot(snap)
     return _LOADED[bucket]

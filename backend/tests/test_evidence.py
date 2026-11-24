@@ -104,7 +104,7 @@ def test_endpoint_includes_each_familys_calibration_table(account, monkeypatch):
 
     async def child(kind, **params):          # stands in for the out-of-process scan
         return evidence.snapshot()
-    monkeypatch.setattr("app.jobs.research.run", child)
+    monkeypatch.setattr("app.jobs.research.cached", child)
     evidence._LOADED.clear()
     evidence._CACHE.update(value=None)
     calibration._CACHE.update(value=None)
