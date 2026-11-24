@@ -140,6 +140,21 @@ CREATE TABLE IF NOT EXISTS users (
     hash        TEXT NOT NULL,
     created_at  REAL NOT NULL
 );
+
+-- Decision journal: one row per trade taken from the board, with the card as it looked.
+CREATE TABLE IF NOT EXISTS journal (
+    id          TEXT PRIMARY KEY,
+    created_at  REAL NOT NULL,
+    username    TEXT NOT NULL,
+    ticker      TEXT NOT NULL,
+    side        TEXT NOT NULL,
+    venue       TEXT NOT NULL,
+    price       REAL NOT NULL,
+    contracts   INTEGER NOT NULL,
+    card_json   TEXT NOT NULL,
+    note        TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_journal_user ON journal(username, created_at);
 """
 
 

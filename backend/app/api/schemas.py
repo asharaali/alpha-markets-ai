@@ -1,7 +1,7 @@
 """Request bodies. Validation lives in the types, so a bad request fails at the edge."""
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -94,3 +94,12 @@ class BacktestRequest(BaseModel):
     start_week: int = Field(default=1, ge=1, le=18)
     markets: Optional[List[str]] = None
     blend_weight: Optional[float] = Field(default=None, ge=0, le=1)
+
+
+class JournalRequest(BaseModel):
+    """A trade taken from the board, logged with the card it came from."""
+
+    card: Dict[str, Any]
+    price: float = Field(gt=0, lt=1)
+    contracts: int = Field(gt=0, le=100000)
+    note: str = Field(default="", max_length=2000)

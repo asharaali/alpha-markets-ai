@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Query, Request
 
 from app import engine
+from app.api import schemas
 from app.core.errors import NotFound
 from app.core.types import Confidence, MarketType
 from app.data import teams
@@ -338,3 +339,19 @@ async def research_evidence():
     rows = sorted((e.to_dict() for e in families.values()),
                   key=lambda d: (order[d["state"]], -d["clusters"]))
     return {"thresholds": evidence.thresholds(), "families": rows}
+
+
+@router.post("/api/journal")
+def journal_record(body: "schemas.JournalRequest", request: Request):
+    from app.api.deps import require_user
+    from app.research import journal
+    return {"id": journal.record(require_user(request), body.card, price=body.price,
+                                 contracts=body.contracts, note=body.note)}
+
+
+@router.get("/api/journal")
+def journal_list(request: Request):
+    from app.api.deps import require_user
+    from app.research import journal
+    items = journal.entries(require_user(request))
+    return {"entries": items, "summary": journal.summary(items)}
