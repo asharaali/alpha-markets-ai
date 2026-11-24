@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import auth
-from app.api import privacy, routes_macro, routes_markets, routes_research, routes_system, routes_trading
+from app.api import privacy, routes_macro, routes_pnl, routes_markets, routes_research, routes_system, routes_trading
 from app.config import settings
 from app.core.errors import AlphaError
 from app.core.logging import configure, get_logger
@@ -60,7 +60,7 @@ async def identify_user(request: Request, call_next):
     request.state.user = auth.read_token(request.cookies.get(auth.COOKIE_NAME))
     path = request.url.path
     if path.startswith("/api/") and not request.state.user:
-        if not privacy.is_public(path):
+        if not privacy.skips_session(path):
             return JSONResponse({"error": "unauthorized",
                                  "message": privacy.UNAUTHORIZED_MESSAGE}, status_code=401)
     return await call_next(request)
@@ -87,6 +87,7 @@ app.include_router(routes_research.router)
 app.include_router(routes_trading.router)
 app.include_router(routes_markets.router)
 app.include_router(routes_macro.router)
+app.include_router(routes_pnl.router)
 
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

@@ -6,6 +6,7 @@ import { ComingSoon } from "./pages/ComingSoon";
 import { Board } from "./pages/Board";
 import { Home } from "./pages/Home";
 import { Macro } from "./pages/Macro";
+import { Pnl } from "./pages/Pnl";
 import { Markets } from "./pages/Markets";
 import { Research } from "./pages/Research";
 import { SECTIONS } from "./sections";
@@ -14,7 +15,7 @@ import { LoginScreen } from "./shell/LoginScreen";
 import { Ticker } from "./shell/Ticker";
 import { TopBar } from "./shell/TopBar";
 
-const BUILT: Record<string, ReactElement> = { board: <Board />, markets: <Markets />, macro: <Macro />, research: <Research /> };
+const BUILT: Record<string, ReactElement> = { board: <Board />, markets: <Markets />, macro: <Macro />, pnl: <Pnl />, research: <Research /> };
 
 function Terminal() {
   const { user, loading } = useSession();

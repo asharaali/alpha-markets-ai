@@ -70,6 +70,12 @@ services:
 
       - key: SITE_SECRET
         generateValue: true      # stable random secret for signing login cookies
+
+      # P&L push (module 3): the Mac job sends snapshots with this bearer token. Set it in
+      # the dashboard to the same value as Keychain "alpha-markets-pnl-push" on the Mac.
+      # Unset (or < 32 chars) = the push route answers 404.
+      - key: PNL_PUSH_TOKEN
+        sync: false
     disk:
       name: data
       mountPath: /var/data       # holds the SQLite database, feed cache and accounts

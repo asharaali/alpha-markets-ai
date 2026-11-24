@@ -6,7 +6,7 @@ export const SECTIONS = [
   { path: "sports", label: "Sports", module: 5, title: "Sports" },
   { path: "macro", label: "Macro", module: null, title: "Macro & rates" },
   { path: "politics", label: "Politics", module: 6, title: "Politics" },
-  { path: "pnl", label: "P&L", module: 3, title: "P&L" },
+  { path: "pnl", label: "P&L", module: null, title: "P&L" },
   { path: "research", label: "Research", module: null, title: "Research & analysis" },
 ] as const;
 
