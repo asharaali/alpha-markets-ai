@@ -63,3 +63,15 @@ export function useApi<T>(path: string, opts: {
   }, [path, maxAgeSec, refreshSec]);
   return state;
 }
+
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  if (isDemo()) throw new Error("Trading and logging are disabled in the demo.");
+  const res = await fetch(`/api${path}`, {
+    method: "POST", credentials: "include",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (res.status === 401) { window.dispatchEvent(new Event(UNAUTHORIZED_EVENT)); throw new UnauthorizedError(); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message ?? `${res.status}`);
+  return data as T;
+}
