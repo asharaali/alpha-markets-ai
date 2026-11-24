@@ -130,3 +130,14 @@ button { font: inherit; color: inherit; }
 .markets-controls input { width: 280px; }
 .small { font-size: 10px; }
 .table a:hover { color: var(--accent); }
+
+/* ── macro ─────────────────────────────────────────────────────────────── */
+.macro-grid { grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
+.kind { font: 600 8px var(--mono); letter-spacing: .1em; padding: 2px 4px; border: 1px solid currentColor; }
+.kind-print { color: var(--muted); } .kind-market { color: var(--accent); } .kind-quote { color: var(--warn); } .kind-index { color: var(--demo); }
+.bar { display: inline-block; height: 6px; background: var(--accent); min-width: 1px; }
+.big-figure { margin: 6px 0; font-size: 13px; } .big-figure b { font-size: 26px; margin-right: 6px; }
+.home-grid > .wide { grid-column: 1 / -1; }
+.strip { display: flex; gap: 28px; flex-wrap: wrap; }
+.tile { display: flex; flex-direction: column; gap: 3px; } .tile b { font-size: 18px; }
+.mini-link { font: 10px var(--mono); color: var(--accent); }

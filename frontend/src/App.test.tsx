@@ -57,7 +57,7 @@ describe("App shell", () => {
 
   it("unbuilt sections say which module brings them", async () => {
     stubFetch({ "/api/me": [200, { user: "ashar" }], "/api/slate": [200, SLATE] });
-    renderAt("/macro");
-    expect(await screen.findByText(/module 4/i)).toBeInTheDocument();
+    renderAt("/politics");
+    expect(await screen.findByText(/module 6/i)).toBeInTheDocument();
   });
 });
