@@ -42,7 +42,8 @@ def _record(name: str, **fields: Any) -> None:
 # Real stagger. The old `min(interval * 0.1, 15)` was 15s for every job, so all of them hit
 # Render's half CPU together right when it waits for the first health checks; a deploy then
 # never went live (2026-11-23). Heavy jobs start a minute apart, after a quiet first minute.
-START_DELAYS = {"calibration": 20, "market_snapshots": 75, "grading": 150, "research_snapshots": 240}
+START_DELAYS = {"calibration": 20, "market_snapshots": 75, "grading": 150, "research_snapshots": 240,
+                "macro_refresh": 330}
 
 
 def start_delay(name: str) -> float:
@@ -135,12 +136,18 @@ async def _research_once() -> Dict[str, Any]:
     return {"seconds": out, "bucket": bucket}
 
 
+async def _macro_once() -> Dict[str, Any]:
+    from app.data.macro import refresh
+    return await refresh.refresh()
+
+
 def job_specs():
     return [
         ("calibration", 6 * 3600, _calibrate_once),
         ("market_snapshots", settings.MARKET_SNAPSHOT_INTERVAL, _snapshot_once),
         ("grading", settings.GRADING_INTERVAL, _grade_once),
         ("research_snapshots", 1800, _research_once),
+        ("macro_refresh", 900, _macro_once),
     ]
 
 

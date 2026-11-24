@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import auth
-from app.api import privacy, routes_markets, routes_research, routes_system, routes_trading
+from app.api import privacy, routes_macro, routes_markets, routes_research, routes_system, routes_trading
 from app.config import settings
 from app.core.errors import AlphaError
 from app.core.logging import configure, get_logger
@@ -86,6 +86,7 @@ app.include_router(routes_system.router)
 app.include_router(routes_research.router)
 app.include_router(routes_trading.router)
 app.include_router(routes_markets.router)
+app.include_router(routes_macro.router)
 
 if STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
