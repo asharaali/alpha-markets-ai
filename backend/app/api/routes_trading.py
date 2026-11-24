@@ -488,9 +488,8 @@ async def default_backtest():
     return await research.run("backtest", seasons=[s for s in seasons if s >= 1999])
 
 
-@router.get("/api/board")
-async def board(request: Request):
-    """The Trade Board: every positive-edge card with its calibrated hit % and evidence."""
+async def board_payload(user):
+    """The Trade Board payload (shared by /api/board and the research briefs)."""
     import asyncio
     import time as _time
 
@@ -499,7 +498,6 @@ async def board(request: Request):
     from app.research import calibration, evidence
 
     analysis = await engine.cached_analysis()
-    user = getattr(request.state, "user", None)
     value_cards, likely_cards = await build_cards(analysis, user)
     ev_map = await asyncio.to_thread(evidence.assess_all)
     cal_map = await asyncio.to_thread(calibration.calibrators)
@@ -513,3 +511,9 @@ async def board(request: Request):
         "empty_reason": None if cards else (
             "No contract on the board has a positive edge after fees at the calibrated hit %."),
     }
+
+
+@router.get("/api/board")
+async def board(request: Request):
+    """The Trade Board: every positive-edge card with its calibrated hit % and evidence."""
+    return await board_payload(getattr(request.state, "user", None))

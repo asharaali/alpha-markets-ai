@@ -357,3 +357,15 @@ def journal_list(request: Request):
     from app.research import journal
     items = journal.entries(require_user(request))
     return {"entries": items, "summary": journal.summary(items)}
+
+
+@router.get("/api/research/briefs")
+async def research_briefs(request: Request):
+    """Claude-written notes on the top board cards; off without ANTHROPIC_API_KEY."""
+    from app.api.routes_trading import board_payload
+    from app.research import briefs
+    try:
+        cards = (await board_payload(getattr(request.state, "user", None)))["cards"][:3]
+    except Exception as exc:   # the board itself failing must not 500 the research page
+        return {"enabled": False, "reason": f"Board unavailable: {exc}"}
+    return await briefs.generate(cards)
