@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 ENDPOINTS = ("/slate", "/strategies", "/status/jobs", "/health",
-             "/board", "/research/evidence", "/markets/browse", "/research/briefs")
+             "/board", "/research/evidence", "/markets/browse", "/research/briefs", "/macro")
 OUT = Path(__file__).resolve().parents[2] / "frontend/public/demo"
 FORBIDDEN = re.compile(r"(?i)balance|bankroll|position|account|user|email|order_id|client_order|kalshi_key")
 
