@@ -39,10 +39,19 @@ def _record(name: str, **fields: Any) -> None:
     entry["last_run"] = time.time()
 
 
+# Real stagger. The old `min(interval * 0.1, 15)` was 15s for every job, so all of them hit
+# Render's half CPU together right when it waits for the first health checks; a deploy then
+# never went live (2026-11-23). Heavy jobs start a minute apart, after a quiet first minute.
+START_DELAYS = {"calibration": 20, "market_snapshots": 75, "grading": 150, "research_snapshots": 240}
+
+
+def start_delay(name: str) -> float:
+    return START_DELAYS.get(name, 300)
+
+
 async def _loop(name: str, interval: float, body) -> None:
     """Run `body` forever on an interval, surviving its failures."""
-    # Stagger startup so three jobs do not all hammer the venue on boot.
-    await asyncio.sleep(min(interval * 0.1, 15))
+    await asyncio.sleep(start_delay(name))
     while True:
         started = time.time()
         try:

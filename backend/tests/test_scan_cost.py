@@ -66,3 +66,16 @@ def test_page_load_computes_only_when_nothing_has_ever_been_computed(tmp_path, m
 def test_the_scheduler_owns_the_scans():
     names = [name for name, _, _ in scheduler.job_specs()]
     assert "research_snapshots" in names
+
+
+def test_jobs_really_stagger_on_boot_so_health_checks_pass_first():
+    """min(interval*0.1, 15) gave every job the same 15s delay, so the cold analysis, grading and
+    the research scans all hit Render's half CPU together and the new instance never answered
+    its first health checks (deploy 546448c stuck 'in progress', 2026-11-23)."""
+    delays = {name: scheduler.start_delay(name) for name, _, _ in scheduler.job_specs()}
+    assert len(set(delays.values())) == len(delays)               # no two jobs start together
+    heavy = ("market_snapshots", "grading", "research_snapshots")
+    assert min(delays[n] for n in heavy) >= 60                    # health checks get a clear minute
+    ordered = sorted(heavy, key=delays.get)
+    gaps = [delays[b] - delays[a] for a, b in zip(ordered, ordered[1:])]
+    assert min(gaps) >= 60                                        # and the heavy ones don't overlap
