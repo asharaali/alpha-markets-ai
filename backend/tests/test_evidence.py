@@ -95,3 +95,17 @@ def test_endpoint_is_private_and_lists_thresholds(account):
     body = client.get("/api/research/evidence").json()
     assert body["thresholds"] == {"min_calls": 150, "min_clusters": 40}
     assert isinstance(body["families"], list)
+
+
+def test_endpoint_includes_each_familys_calibration_table(account, monkeypatch):
+    from app.research import calibration
+    rows = _rows(60, model_skill=1.0, market_skill=0.3)
+    monkeypatch.setattr(evidence, "group_settled", lambda: {("ensemble", "spread"): rows})
+    evidence._CACHE.update(value=None)
+    calibration._CACHE.update(value=None)
+    client = TestClient(app)
+    client.post("/api/login", json={"username": account, "password": "evidence-password"})
+    [fam] = client.get("/api/research/evidence").json()["families"]
+    assert fam["calibration"] and {"bucket", "n", "predicted", "observed"} <= set(fam["calibration"][0])
+    evidence._CACHE.update(value=None)
+    calibration._CACHE.update(value=None)

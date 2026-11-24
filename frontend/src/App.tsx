@@ -5,13 +5,15 @@ import { isDemo } from "./lib/api";
 import { ComingSoon } from "./pages/ComingSoon";
 import { Board } from "./pages/Board";
 import { Home } from "./pages/Home";
+import { Markets } from "./pages/Markets";
+import { Research } from "./pages/Research";
 import { SECTIONS } from "./sections";
 import { DemoBanner } from "./shell/DemoBanner";
 import { LoginScreen } from "./shell/LoginScreen";
 import { Ticker } from "./shell/Ticker";
 import { TopBar } from "./shell/TopBar";
 
-const BUILT: Record<string, ReactElement> = { board: <Board /> };
+const BUILT: Record<string, ReactElement> = { board: <Board />, markets: <Markets />, research: <Research /> };
 
 function Terminal() {
   const { user, loading } = useSession();

@@ -333,10 +333,12 @@ async def research_evidence():
     """Evidence state per strategy x market type, and the thresholds that decide it."""
     import asyncio
 
-    from app.research import evidence
+    from app.research import calibration, evidence
     families = await asyncio.to_thread(evidence.assess_all)
+    cals = await asyncio.to_thread(calibration.calibrators)
     order = {"PROVEN": 0, "WATCHING": 1, "FAILING": 2}
-    rows = sorted((e.to_dict() for e in families.values()),
+    rows = sorted(({**e.to_dict(), "calibration": cals[f].table() if f in cals else []}
+                   for f, e in families.items()),
                   key=lambda d: (order[d["state"]], -d["clusters"]))
     return {"thresholds": evidence.thresholds(), "families": rows}
 
