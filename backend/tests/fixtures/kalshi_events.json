@@ -1,0 +1,128 @@
+{
+ "events": [
+  {
+   "event_ticker": "KXELONMARS-99",
+   "series_ticker": "KXELONMARS",
+   "title": "Will Elon Musk visit Mars in his lifetime?",
+   "category": "Science and Technology",
+   "sub_title": "Before 2099",
+   "markets": [
+    {
+     "ticker": "KXELONMARS-99",
+     "title": "Will Elon Musk visit Mars before Aug 1, 2099?",
+     "yes_sub_title": "Mars",
+     "yes_bid_dollars": "0.1000",
+     "yes_ask_dollars": "0.1300",
+     "last_price_dollars": "0.1300",
+     "volume_fp": "127819.39",
+     "close_time": "2099-08-01T04:59:00Z",
+     "status": "active"
+    }
+   ]
+  },
+  {
+   "event_ticker": "KXNEXTNATOSECGEN-99",
+   "series_ticker": "KXNEXTNATOSECGEN",
+   "title": "Who will be the next Secretary General of NATO?",
+   "category": "Elections",
+   "sub_title": "Before Jan 1, 2099",
+   "markets": [
+    {
+     "ticker": "KXNEXTNATOSECGEN-99-KIOH",
+     "title": "Will Klaus Iohannis be the next Secretary General of NATO?",
+     "yes_sub_title": "Klaus Iohannis",
+     "yes_bid_dollars": "0.0200",
+     "yes_ask_dollars": "0.0400",
+     "last_price_dollars": "0.0400",
+     "volume_fp": "383.36",
+     "close_time": "2099-01-08T15:00:00Z",
+     "status": "active"
+    },
+    {
+     "ticker": "KXNEXTNATOSECGEN-99-KKAL",
+     "title": "Will Kaja Kallas be the next Secretary General of NATO?",
+     "yes_sub_title": "Kaja Kallas",
+     "yes_bid_dollars": "0.1300",
+     "yes_ask_dollars": "0.1800",
+     "last_price_dollars": "0.1800",
+     "volume_fp": "1975.86",
+     "close_time": "2099-01-08T15:00:00Z",
+     "status": "active"
+    },
+    {
+     "ticker": "KXNEXTNATOSECGEN-99-BWAL",
+     "title": "Will Ben Wallace be the next Secretary General of NATO?",
+     "yes_sub_title": "Ben Wallace",
+     "yes_bid_dollars": "0.0100",
+     "yes_ask_dollars": "0.0200",
+     "last_price_dollars": "0.0100",
+     "volume_fp": "1181.86",
+     "close_time": "2099-01-08T15:00:00Z",
+     "status": "active"
+    }
+   ]
+  },
+  {
+   "event_ticker": "KXNEWPOPE-70",
+   "series_ticker": "KXNEWPOPE",
+   "title": "Who will the next Pope be?",
+   "category": "Elections",
+   "sub_title": "Before 2070",
+   "markets": [
+    {
+     "ticker": "KXNEWPOPE-70-PPIZ",
+     "title": "Who will the next Pope be?",
+     "yes_sub_title": "Pierbattista Pizzaballa",
+     "yes_bid_dollars": "0.0300",
+     "yes_ask_dollars": "0.0450",
+     "last_price_dollars": "0.0300",
+     "volume_fp": "21067.16",
+     "close_time": "2070-01-01T15:00:00Z",
+     "status": "active"
+    },
+    {
+     "ticker": "KXNEWPOPE-70-PPAR",
+     "title": "Who will the next Pope be?",
+     "yes_sub_title": "Pietro Parolin",
+     "yes_bid_dollars": "0.0400",
+     "yes_ask_dollars": "0.0550",
+     "last_price_dollars": "0.0400",
+     "volume_fp": "26231.02",
+     "close_time": "2070-01-01T15:00:00Z",
+     "status": "active"
+    },
+    {
+     "ticker": "KXNEWPOPE-70-FAMB",
+     "title": "Who will the next Pope be?",
+     "yes_sub_title": "Fridolin Ambongo",
+     "yes_bid_dollars": "0.0200",
+     "yes_ask_dollars": "0.0330",
+     "last_price_dollars": "0.0200",
+     "volume_fp": "19634.05",
+     "close_time": "2070-01-01T15:00:00Z",
+     "status": "active"
+    }
+   ]
+  },
+  {
+   "event_ticker": "KXWARMING-50",
+   "series_ticker": "KXWARMING",
+   "title": "Will the world pass 2 degrees Celsius over pre-industrial levels before 2050?",
+   "category": "Climate and Weather",
+   "sub_title": "Before 2050",
+   "markets": [
+    {
+     "ticker": "KXWARMING-50",
+     "title": "Will the world pass 2 degrees Celsius over pre-industrial levels before 2050?",
+     "yes_sub_title": "Before 2050",
+     "yes_bid_dollars": "0.6700",
+     "yes_ask_dollars": "0.7100",
+     "last_price_dollars": "0.6700",
+     "volume_fp": "21888.89",
+     "close_time": "2050-01-01T04:59:00Z",
+     "status": "active"
+    }
+   ]
+  }
+ ]
+}

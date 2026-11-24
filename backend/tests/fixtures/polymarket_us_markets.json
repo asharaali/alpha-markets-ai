@@ -1,0 +1,139 @@
+{
+ "markets": [
+  {
+   "id": "7974",
+   "question": "Major League Soccer Champion",
+   "title": "Vancouver Whitecaps FC",
+   "slug": "tec-mls-winner-2026-11-07-vwh",
+   "endDate": "2027-01-01T21:20:09Z",
+   "category": "sports",
+   "active": true,
+   "closed": false,
+   "outcomes": "[\"No\",\"Yes\"]",
+   "outcomePrices": "[\"0.2640\",\"0.757\"]",
+   "bestBidQuote": {
+    "value": "0.2430",
+    "currency": "USD"
+   },
+   "bestAskQuote": {
+    "value": "0.2640",
+    "currency": "USD"
+   },
+   "marketSides": [
+    {
+     "description": "Yes",
+     "price": "0.2640",
+     "long": true
+    },
+    {
+     "description": "No",
+     "price": "0.757",
+     "long": false
+    }
+   ]
+  },
+  {
+   "id": "7976",
+   "question": "Major League Soccer Champion",
+   "title": "Columbus Crew",
+   "slug": "tec-mls-winner-2026-11-07-clb",
+   "endDate": "2027-01-01T21:20:09Z",
+   "category": "sports",
+   "active": true,
+   "closed": false,
+   "outcomes": "[\"Yes\",\"No\"]",
+   "outcomePrices": "[\"0.0540\",\"0.947\"]",
+   "bestBidQuote": {
+    "value": "0.0530",
+    "currency": "USD"
+   },
+   "bestAskQuote": {
+    "value": "0.0540",
+    "currency": "USD"
+   },
+   "marketSides": [
+    {
+     "description": "Yes",
+     "price": "0.0540",
+     "long": true
+    },
+    {
+     "description": "No",
+     "price": "0.947",
+     "long": false
+    }
+   ]
+  },
+  {
+   "id": "7980",
+   "question": "Major League Soccer Champion",
+   "title": "Nashville SC",
+   "slug": "tec-mls-winner-2026-11-07-nas",
+   "endDate": "2027-01-01T21:20:09Z",
+   "category": "sports",
+   "active": true,
+   "closed": false,
+   "outcomes": "[\"No\",\"Yes\"]",
+   "outcomePrices": "[\"0.1700\",\"0.845\"]",
+   "bestBidQuote": {
+    "value": "0.1550",
+    "currency": "USD"
+   },
+   "bestAskQuote": {
+    "value": "0.1700",
+    "currency": "USD"
+   },
+   "marketSides": [
+    {
+     "description": "Yes",
+     "price": "0.1700",
+     "long": true
+    },
+    {
+     "description": "No",
+     "price": "0.845",
+     "long": false
+    }
+   ]
+  },
+  {
+   "id": "7990",
+   "question": "Major League Soccer Champion",
+   "title": "FC Cincinnati",
+   "slug": "tec-mls-winner-2026-11-07-fcc",
+   "endDate": "2027-01-01T21:20:09Z",
+   "category": "sports",
+   "active": true,
+   "closed": false,
+   "outcomes": "[\"No\",\"Yes\"]",
+   "outcomePrices": "[\"0.0480\",\"0.974\"]",
+   "bestBidQuote": {
+    "value": "0.0260",
+    "currency": "USD"
+   },
+   "bestAskQuote": {
+    "value": "0.0480",
+    "currency": "USD"
+   },
+   "marketSides": [
+    {
+     "description": "Yes",
+     "price": "0.0480",
+     "long": true
+    },
+    {
+     "description": "No",
+     "price": "0.974",
+     "long": false
+    }
+   ]
+  },
+  {
+   "id": "broken",
+   "question": "Market with no sides",
+   "slug": "broken",
+   "category": "sports",
+   "marketSides": []
+  }
+ ]
+}
