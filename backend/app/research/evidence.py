@@ -11,6 +11,7 @@ They are never lowered to put something on the board: "nothing is proven" is an 
 from __future__ import annotations
 
 import math
+import threading
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -113,12 +114,36 @@ def assess(rows: Iterable[Dict[str, Any]]) -> Evidence:
                     roi_after_fees=roi, reason=reason)
 
 
-def group_settled() -> Dict[Family, List[Dict[str, Any]]]:
+def dedupe_by_family(rows: Iterable[Dict[str, Any]]) -> Dict[Family, List[Dict[str, Any]]]:
+    """Stream settled rows and keep only the latest forecast per contract, per family.
+
+    Never materialise the raw rows: on 2026-11-23 holding all ~300k of them (each refresh is a
+    row) OOM-killed the 512MB Render instance. Memory is bounded by distinct forecasts, which
+    is all assess() and Calibrator.fit() ever use (both dedupe the same way).
+    """
+    best: Dict[Family, Dict[str, Dict[str, Any]]] = defaultdict(dict)
+    for row in rows:
+        fam, key = family_key(row), protocol.forecast_key(row)
+        current = best[fam].get(key)
+        if current is None or protocol._ordering(row) >= protocol._ordering(current):
+            best[fam][key] = row
+    return {fam: list(rows_.values()) for fam, rows_ in best.items()}
+
+
+_GROUP_LOCK = threading.Lock()
+_GROUPS: Dict[str, Any] = {"at": 0.0, "value": None}
+
+
+def group_settled(*, force: bool = False) -> Dict[Family, List[Dict[str, Any]]]:
+    """Deduped settled rows per family, computed once per CACHE_SECONDS and shared by the
+    evidence gate and calibration. The lock stops concurrent page loads each running the scan."""
     from app.tracking import store
-    groups: Dict[Family, List[Dict[str, Any]]] = defaultdict(list)
-    for row in store.iter_settled_predictions():
-        groups[family_key(row)].append(row)
-    return groups
+    with _GROUP_LOCK:
+        if not force and _GROUPS["value"] is not None and time.time() - _GROUPS["at"] < CACHE_SECONDS:
+            return _GROUPS["value"]
+        value = dedupe_by_family(store.iter_settled_predictions())
+        _GROUPS.update(at=time.time(), value=value)
+        return value
 
 
 _CACHE: Dict[str, Any] = {"at": 0.0, "value": None}
@@ -128,7 +153,7 @@ CACHE_SECONDS = 1800
 def assess_all(*, force: bool = False) -> Dict[Family, Evidence]:
     if not force and _CACHE["value"] is not None and time.time() - _CACHE["at"] < CACHE_SECONDS:
         return _CACHE["value"]
-    value = {fam: assess(rows) for fam, rows in group_settled().items()}
+    value = {fam: assess(rows) for fam, rows in group_settled(force=force).items()}
     _CACHE.update(at=time.time(), value=value)
     return value
 

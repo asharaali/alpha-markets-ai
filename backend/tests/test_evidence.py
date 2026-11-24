@@ -100,7 +100,7 @@ def test_endpoint_is_private_and_lists_thresholds(account):
 def test_endpoint_includes_each_familys_calibration_table(account, monkeypatch):
     from app.research import calibration
     rows = _rows(60, model_skill=1.0, market_skill=0.3)
-    monkeypatch.setattr(evidence, "group_settled", lambda: {("ensemble", "spread"): rows})
+    monkeypatch.setattr(evidence, "group_settled", lambda **kw: {("ensemble", "spread"): rows})
     evidence._CACHE.update(value=None)
     calibration._CACHE.update(value=None)
     client = TestClient(app)
@@ -109,3 +109,23 @@ def test_endpoint_includes_each_familys_calibration_table(account, monkeypatch):
     assert fam["calibration"] and {"bucket", "n", "predicted", "observed"} <= set(fam["calibration"][0])
     evidence._CACHE.update(value=None)
     calibration._CACHE.update(value=None)
+
+
+def test_grouping_streams_and_keeps_only_the_latest_forecast():
+    """The 2026-11-23 outage: group_settled() materialised every settled row (~300k on prod),
+    the 512MB instance was OOM-killed. Only the latest forecast per contract is ever used,
+    so that is all the grouping may hold."""
+    consumed = 0
+
+    def stream():
+        nonlocal consumed
+        for row in _rows(14, model_skill=1.0, market_skill=0.3, refreshes=500):
+            consumed += 1
+            yield row
+
+    groups = evidence.dedupe_by_family(stream())
+    assert consumed == 14 * 5 * 500                       # it read everything...
+    assert sum(len(v) for v in groups.values()) == 70     # ...but kept one row per forecast
+    kept = groups[("ensemble", "spread")]
+    assert all(r["created_at"] == 1_790_000_000 + 499 for r in kept)   # the latest refresh
+    assert evidence.assess(kept).calls == 70

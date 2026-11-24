@@ -68,6 +68,6 @@ def calibrators(*, force: bool = False):
     from app.research import evidence
     if not force and _CACHE["value"] is not None and time.time() - _CACHE["at"] < CACHE_SECONDS:
         return _CACHE["value"]
-    value = {fam: Calibrator().fit(rows) for fam, rows in evidence.group_settled().items()}
+    value = {fam: Calibrator().fit(rows) for fam, rows in evidence.group_settled(force=force).items()}
     _CACHE.update(at=time.time(), value=value)
     return value
