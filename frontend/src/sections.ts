@@ -3,7 +3,7 @@ export const SECTIONS = [
   { path: "", label: "Home", module: null, title: "Home" },
   { path: "board", label: "Board", module: null, title: "Trade Board" },
   { path: "markets", label: "Markets", module: null, title: "Prediction-market terminal" },
-  { path: "sports", label: "Sports", module: 5, title: "Sports" },
+  { path: "sports", label: "Sports", module: null, title: "Sports" },
   { path: "macro", label: "Macro", module: null, title: "Macro & rates" },
   { path: "politics", label: "Politics", module: 6, title: "Politics" },
   { path: "pnl", label: "P&L", module: null, title: "P&L" },

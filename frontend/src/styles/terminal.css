@@ -150,3 +150,17 @@ button { font: inherit; color: inherit; }
 .kv dt { color: var(--muted); } .kv dd { margin: 0; }
 .spark { display: block; width: 100%; height: 44px; margin: 4px 0 8px; }
 .pnl-grid .num { white-space: nowrap; }
+/* Sports */
+.warn { color: var(--warn); }
+.sports-grid { grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
+.sp-wide { grid-column: 1 / -1; }
+.sports-grid .num { white-space: nowrap; }
+.sp-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 10px; }
+.sp-tab { font: 600 11px var(--mono); letter-spacing: .06em; padding: 5px 10px; background: transparent;
+  color: var(--muted); border: 1px solid var(--line); cursor: pointer; }
+.sp-tab:hover { color: var(--text); border-color: var(--muted); }
+.sp-tab.on { color: var(--accent); border-color: var(--accent); }
+.sp-tab.off { opacity: .55; }
+.sp-count { margin-left: 6px; color: var(--good); }
+.sp-live { margin-left: 6px; }
+.link-btn { background: none; border: 0; padding: 6px 0 0; color: var(--accent); font: 500 11px var(--mono); cursor: pointer; }

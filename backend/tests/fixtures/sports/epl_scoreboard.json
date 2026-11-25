@@ -1,0 +1,114 @@
+{
+ "leagues": [
+  {
+   "season": {
+    "year": 2026,
+    "startDate": "2026-06-01T04:00Z",
+    "endDate": "2027-06-01T03:59Z",
+    "displayName": "2026-27 English Premier League"
+   },
+   "calendar": [
+    "2026-08-21T07:00Z",
+    "2026-08-22T07:00Z",
+    "2026-08-23T07:00Z"
+   ]
+  }
+ ],
+ "events": [
+  {
+   "id": "401879225",
+   "date": "2026-11-27T20:00Z",
+   "season": {
+    "year": 2026,
+    "type": 14308,
+    "slug": "2026-27-english-premier-league"
+   },
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "id": "393",
+        "abbreviation": "NFO",
+        "displayName": "Nottingham Forest",
+        "shortDisplayName": "Nottm Forest"
+       },
+       "score": "0",
+       "records": [
+        {
+         "name": "All Splits",
+         "type": "total",
+         "summary": "2-3-6",
+         "abbreviation": "Total"
+        }
+       ],
+       "winner": false
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "id": "363",
+        "abbreviation": "CHE",
+        "displayName": "Chelsea",
+        "shortDisplayName": "Chelsea"
+       },
+       "score": "0",
+       "records": [
+        {
+         "name": "All Splits",
+         "type": "total",
+         "summary": "5-1-5",
+         "abbreviation": "Total"
+        }
+       ],
+       "winner": false
+      }
+     ],
+     "status": {
+      "type": {
+       "name": "STATUS_SCHEDULED",
+       "state": "pre",
+       "completed": false,
+       "shortDetail": "Scheduled"
+      }
+     },
+     "odds": [
+      {
+       "details": "NFO +160",
+       "provider": {
+        "name": "DraftKings"
+       },
+       "moneyline": {
+        "home": {
+         "close": {
+          "odds": "+160"
+         },
+         "open": {
+          "odds": "+170"
+         }
+        },
+        "away": {
+         "close": {
+          "odds": "+175"
+         },
+         "open": {
+          "odds": "+145"
+         }
+        },
+        "draw": {
+         "close": {
+          "odds": "+240"
+         },
+         "open": {
+          "odds": "+245"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

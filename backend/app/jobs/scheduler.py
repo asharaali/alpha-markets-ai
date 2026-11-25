@@ -43,7 +43,7 @@ def _record(name: str, **fields: Any) -> None:
 # Render's half CPU together right when it waits for the first health checks; a deploy then
 # never went live (2026-11-23). Heavy jobs start a minute apart, after a quiet first minute.
 START_DELAYS = {"calibration": 20, "market_snapshots": 75, "grading": 150, "research_snapshots": 240,
-                "macro_refresh": 330}
+                "macro_refresh": 330, "sports_refresh": 400}
 
 
 def start_delay(name: str) -> float:
@@ -141,6 +141,11 @@ async def _macro_once() -> Dict[str, Any]:
     return await refresh.refresh()
 
 
+async def _sports_once() -> Dict[str, Any]:
+    from app.data.sports import refresh
+    return await refresh.refresh()
+
+
 def job_specs():
     return [
         ("calibration", 6 * 3600, _calibrate_once),
@@ -148,6 +153,7 @@ def job_specs():
         ("grading", settings.GRADING_INTERVAL, _grade_once),
         ("research_snapshots", 1800, _research_once),
         ("macro_refresh", 900, _macro_once),
+        ("sports_refresh", 300, _sports_once),
     ]
 
 

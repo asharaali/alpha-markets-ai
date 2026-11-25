@@ -54,3 +54,11 @@ def test_demo_board_never_offers_in_app_trading():
 def test_snapshot_covers_the_module_2_pages():
     for path in ("/board", "/research/evidence", "/markets/browse", "/research/briefs"):
         assert path in snapshot_demo.ENDPOINTS
+
+
+def test_snapshot_covers_every_sports_league():
+    from app.data.sports.leagues import LEAGUES
+    assert "/sports" in snapshot_demo.ENDPOINTS
+    for key in LEAGUES:
+        assert f"/sports/{key}" in snapshot_demo.ENDPOINTS
+        assert (ROOT / "frontend/public/demo" / f"sports_{key}.json").exists()

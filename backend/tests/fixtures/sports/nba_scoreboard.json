@@ -1,0 +1,287 @@
+{
+ "leagues": [
+  {
+   "season": {
+    "year": 2027,
+    "startDate": "2026-09-30T07:00Z",
+    "endDate": "2027-06-26T06:59Z",
+    "displayName": "2026-27"
+   },
+   "calendar": [
+    "2026-10-03T07:00Z",
+    "2026-10-04T07:00Z",
+    "2026-10-05T07:00Z",
+    "2026-10-06T07:00Z",
+    "2026-10-07T07:00Z"
+   ]
+  }
+ ],
+ "events": [
+  {
+   "id": "401909314",
+   "date": "2026-11-25T00:00Z",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "id": "19",
+        "abbreviation": "ORL",
+        "displayName": "Orlando Magic",
+        "shortDisplayName": "Magic"
+       },
+       "score": "61",
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "7-9"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "1-5"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "6-4"
+        }
+       ]
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "id": "8",
+        "abbreviation": "DET",
+        "displayName": "Detroit Pistons",
+        "shortDisplayName": "Pistons"
+       },
+       "score": "75",
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "10-6"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "3-3"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "7-3"
+        }
+       ]
+      }
+     ],
+     "status": {
+      "type": {
+       "name": "STATUS_IN_PROGRESS",
+       "state": "in",
+       "completed": false,
+       "shortDetail": "10:51 - 4th"
+      }
+     },
+     "neutralSite": false
+    }
+   ]
+  },
+  {
+   "id": "401909315",
+   "date": "2026-11-25T01:00Z",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "id": "27",
+        "abbreviation": "WSH",
+        "displayName": "Washington Wizards",
+        "shortDisplayName": "Wizards"
+       },
+       "score": "34",
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "7-11"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "3-5"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "4-6"
+        }
+       ]
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "id": "2",
+        "abbreviation": "BOS",
+        "displayName": "Boston Celtics",
+        "shortDisplayName": "Celtics"
+       },
+       "score": "53",
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "11-6"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "6-1"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "5-5"
+        }
+       ]
+      }
+     ],
+     "status": {
+      "type": {
+       "name": "STATUS_IN_PROGRESS",
+       "state": "in",
+       "completed": false,
+       "shortDetail": "6:17 - 2nd"
+      }
+     },
+     "neutralSite": false
+    }
+   ]
+  },
+  {
+   "id": "401909316",
+   "date": "2026-11-25T03:00Z",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "competitions": [
+    {
+     "competitors": [
+      {
+       "homeAway": "home",
+       "team": {
+        "id": "7",
+        "abbreviation": "DEN",
+        "displayName": "Denver Nuggets",
+        "shortDisplayName": "Nuggets"
+       },
+       "score": "0",
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "10-5"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "4-3"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "5-2"
+        }
+       ]
+      },
+      {
+       "homeAway": "away",
+       "team": {
+        "id": "6",
+        "abbreviation": "DAL",
+        "displayName": "Dallas Mavericks",
+        "shortDisplayName": "Mavericks"
+       },
+       "score": "0",
+       "records": [
+        {
+         "name": "overall",
+         "abbreviation": "Total",
+         "type": "total",
+         "summary": "10-7"
+        },
+        {
+         "name": "Home",
+         "type": "home",
+         "summary": "7-2"
+        },
+        {
+         "name": "Road",
+         "type": "road",
+         "summary": "3-5"
+        }
+       ]
+      }
+     ],
+     "status": {
+      "type": {
+       "name": "STATUS_SCHEDULED",
+       "state": "pre",
+       "completed": false,
+       "shortDetail": "11/24 - 10:00 PM EST"
+      }
+     },
+     "neutralSite": false,
+     "odds": [
+      {
+       "details": "DEN -8.5",
+       "provider": {
+        "name": "DraftKings"
+       },
+       "moneyline": {
+        "home": {
+         "close": {
+          "odds": "-297"
+         },
+         "open": {
+          "odds": "-345"
+         }
+        },
+        "away": {
+         "close": {
+          "odds": "+241"
+         },
+         "open": {
+          "odds": "+275"
+         }
+        }
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

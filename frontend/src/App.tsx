@@ -9,13 +9,14 @@ import { Macro } from "./pages/Macro";
 import { Pnl } from "./pages/Pnl";
 import { Markets } from "./pages/Markets";
 import { Research } from "./pages/Research";
+import { Sports } from "./pages/Sports";
 import { SECTIONS } from "./sections";
 import { DemoBanner } from "./shell/DemoBanner";
 import { LoginScreen } from "./shell/LoginScreen";
 import { Ticker } from "./shell/Ticker";
 import { TopBar } from "./shell/TopBar";
 
-const BUILT: Record<string, ReactElement> = { board: <Board />, markets: <Markets />, macro: <Macro />, pnl: <Pnl />, research: <Research /> };
+const BUILT: Record<string, ReactElement> = { board: <Board />, markets: <Markets />, macro: <Macro />, pnl: <Pnl />, research: <Research />, sports: <Sports /> };
 
 function Terminal() {
   const { user, loading } = useSession();
